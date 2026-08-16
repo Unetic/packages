@@ -1,0 +1,152 @@
+name: Publish repository
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  manifest:
+    runs-on: ubuntu-24.04
+    outputs:
+      core: ${{ steps.versions.outputs.core }}
+      cli: ${{ steps.versions.outputs.cli }}
+      web: ${{ steps.versions.outputs.web }}
+    steps:
+      - uses: actions/checkout@v4
+      - run: scripts/manifest.sh validate
+      - id: versions
+        run: |
+          {
+            echo "core=$(scripts/manifest.sh get unetic-core)"
+            echo "cli=$(scripts/manifest.sh get unetic-cli)"
+            echo "web=$(scripts/manifest.sh get unetic-web)"
+          } >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: manifest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - package-arch: aarch64_cortex-a53
+            openwrt-target: mediatek
+            openwrt-subtarget: filogic
+            sdk-file: openwrt-sdk-25.12.5-mediatek-filogic_gcc-14.3.0_musl.Linux-x86_64.tar.zst
+            sdk-sha256: ff4a38a397caa2cfe1c39e18f84ddede14878221b3593c3f2c4cfe24e3ec4c25
+            rust-target: aarch64-unknown-linux-musl
+            rust-toolchain: "1.88.0"
+            rust-build-std: false
+            toolchain-prefix: aarch64-openwrt-linux-musl
+          - package-arch: mipsel_24kc
+            openwrt-target: ramips
+            openwrt-subtarget: mt7621
+            sdk-file: openwrt-sdk-25.12.5-ramips-mt7621_gcc-14.3.0_musl.Linux-x86_64.tar.zst
+            sdk-sha256: 9962084f4131610e90e48bc864c6ceade0b238f15f335de5f672910532b20e9c
+            rust-target: mipsel-unknown-linux-musl
+            rust-toolchain: nightly-2025-08-01
+            rust-build-std: true
+            toolchain-prefix: mipsel-openwrt-linux-musl
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: Unetic/unetic-core
+          ref: ${{ needs.manifest.outputs.core }}
+          path: sources/unetic-core
+      - uses: actions/checkout@v4
+        with:
+          repository: Unetic/unetic-cli
+          ref: ${{ needs.manifest.outputs.cli }}
+          path: sources/unetic-cli
+      - uses: actions/checkout@v4
+        with:
+          repository: Unetic/unetic-web
+          ref: ${{ needs.manifest.outputs.web }}
+          path: sources/unetic-web
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: sources/unetic-web/package-lock.json
+      - name: Install Rust toolchain
+        env:
+          RUST_BUILD_STD: ${{ matrix.rust-build-std }}
+          RUST_TARGET: ${{ matrix.rust-target }}
+          RUST_TOOLCHAIN: ${{ matrix.rust-toolchain }}
+        run: |
+          if [ "$RUST_BUILD_STD" = true ]; then
+            rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal --component rust-src
+          else
+            rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal --target "$RUST_TARGET"
+          fi
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            sources/unetic-core/target
+            sources/unetic-cli/target
+          key: cargo-${{ runner.os }}-${{ matrix.rust-target }}-${{ hashFiles('sources/**/Cargo.lock') }}
+      - name: Build signed repository
+        env:
+          SDK_FILE: ${{ matrix.sdk-file }}
+          SDK_SHA256: ${{ matrix.sdk-sha256 }}
+          OPENWRT_TARGET: ${{ matrix.openwrt-target }}
+          OPENWRT_SUBTARGET: ${{ matrix.openwrt-subtarget }}
+          PACKAGE_ARCH: ${{ matrix.package-arch }}
+          RUST_TARGET: ${{ matrix.rust-target }}
+          RUST_TOOLCHAIN: ${{ matrix.rust-toolchain }}
+          RUST_BUILD_STD: ${{ matrix.rust-build-std }}
+          TOOLCHAIN_PREFIX: ${{ matrix.toolchain-prefix }}
+          UNETIC_APK_PRIVATE_KEY: ${{ secrets.UNETIC_APK_PRIVATE_KEY }}
+        run: scripts/build-repository.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: repository-${{ matrix.package-arch }}
+          path: output/
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.pages.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: repository-*
+          path: site
+          merge-multiple: true
+      - run: |
+          mkdir -p site/keys release-assets
+          cp keys/unetic.pem site/keys/
+          for arch in aarch64_cortex-a53 mipsel_24kc; do
+            tar -C site/25.12.5 -czf "release-assets/unetic-25.12.5-$arch.tar.gz" "$arch"
+          done
+          cp manifest.yml keys/unetic.pem release-assets/
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v4
+        with:
+          path: site
+      - id: pages
+        uses: actions/deploy-pages@v4
+      - name: Publish release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" release-assets/* --clobber
+          else
+            gh release create "$TAG" release-assets/* --generate-notes --verify-tag
+          fi

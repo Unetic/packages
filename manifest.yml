@@ -1,0 +1,5 @@
+openwrt: 25.12.5
+components:
+  unetic-core: v0.1.0
+  unetic-cli: v0.1.0
+  unetic-web: v0.1.0

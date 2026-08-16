@@ -1,0 +1,4 @@
+*.apk
+packages.adb
+private-key.pem
+output/
