@@ -36,8 +36,6 @@ configure_signing() {
 		| diff - "$sdk/public-key.pem"
 
 	make -C "$sdk" defconfig
-	"$sdk/scripts/config" --enable SIGNED_PACKAGES
-	make -C "$sdk" defconfig
 }
 
 build_rust() {
