@@ -30,7 +30,7 @@ case "${1:-}" in
 		validate_tag unetic-core "$(value unetic-core)"
 		validate_tag unetic-cli "$(value unetic-cli)"
 		validate_tag unetic-web "$(value unetic-web)"
-		openssl pkey -pubin -in keys/unetic.pem -noout
+		openssl pkey -pubin -in keys/unetic-apk-public.pem -noout
 		;;
 	*)
 		echo "Usage: $0 get <key> | validate" >&2

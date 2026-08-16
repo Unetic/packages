@@ -2,7 +2,8 @@ name: Publish repository
 
 on:
   push:
-    tags: ["v*"]
+    tags:
+      - "v*"
 
 permissions:
   contents: read
@@ -14,10 +15,16 @@ jobs:
       core: ${{ steps.versions.outputs.core }}
       cli: ${{ steps.versions.outputs.cli }}
       web: ${{ steps.versions.outputs.web }}
+
     steps:
-      - uses: actions/checkout@v4
-      - run: scripts/manifest.sh validate
-      - id: versions
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Validate manifest
+        run: scripts/manifest.sh validate
+
+      - name: Read component versions
+        id: versions
         run: |
           {
             echo "core=$(scripts/manifest.sh get unetic-core)"
@@ -25,8 +32,40 @@ jobs:
             echo "web=$(scripts/manifest.sh get unetic-web)"
           } >> "$GITHUB_OUTPUT"
 
-  build:
+  web:
     needs: manifest
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Check out web source
+        uses: actions/checkout@v4
+        with:
+          repository: Unetic/unetic-web
+          ref: ${{ needs.manifest.outputs.web }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Build production web assets
+        run: |
+          npm ci
+          npm run build
+
+      - name: Upload web assets
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-assets
+          path: dist/
+          if-no-files-found: error
+
+  build:
+    needs:
+      - manifest
+      - web
+
     strategy:
       fail-fast: false
       matrix:
@@ -49,29 +88,40 @@ jobs:
             rust-toolchain: nightly-2025-08-01
             rust-build-std: true
             toolchain-prefix: mipsel-openwrt-linux-musl
+
     runs-on: ubuntu-24.04
+
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/checkout@v4
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Check out core source
+        uses: actions/checkout@v4
         with:
           repository: Unetic/unetic-core
           ref: ${{ needs.manifest.outputs.core }}
           path: sources/unetic-core
-      - uses: actions/checkout@v4
+
+      - name: Check out CLI source
+        uses: actions/checkout@v4
         with:
           repository: Unetic/unetic-cli
           ref: ${{ needs.manifest.outputs.cli }}
           path: sources/unetic-cli
-      - uses: actions/checkout@v4
+
+      - name: Check out web source
+        uses: actions/checkout@v4
         with:
           repository: Unetic/unetic-web
           ref: ${{ needs.manifest.outputs.web }}
           path: sources/unetic-web
-      - uses: actions/setup-node@v4
+
+      - name: Download web assets
+        uses: actions/download-artifact@v4
         with:
-          node-version: "24"
-          cache: npm
-          cache-dependency-path: sources/unetic-web/package-lock.json
+          name: web-assets
+          path: sources/unetic-web/dist
+
       - name: Install Rust toolchain
         env:
           RUST_BUILD_STD: ${{ matrix.rust-build-std }}
@@ -79,11 +129,17 @@ jobs:
           RUST_TOOLCHAIN: ${{ matrix.rust-toolchain }}
         run: |
           if [ "$RUST_BUILD_STD" = true ]; then
-            rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal --component rust-src
+            rustup toolchain install "$RUST_TOOLCHAIN" \
+              --profile minimal \
+              --component rust-src
           else
-            rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal --target "$RUST_TARGET"
+            rustup toolchain install "$RUST_TOOLCHAIN" \
+              --profile minimal \
+              --target "$RUST_TARGET"
           fi
-      - uses: actions/cache@v4
+
+      - name: Cache Cargo dependencies
+        uses: actions/cache@v4
         with:
           path: |
             ~/.cargo/registry
@@ -91,6 +147,7 @@ jobs:
             sources/unetic-core/target
             sources/unetic-cli/target
           key: cargo-${{ runner.os }}-${{ matrix.rust-target }}-${{ hashFiles('sources/**/Cargo.lock') }}
+
       - name: Build signed repository
         env:
           SDK_FILE: ${{ matrix.sdk-file }}
@@ -104,7 +161,9 @@ jobs:
           TOOLCHAIN_PREFIX: ${{ matrix.toolchain-prefix }}
           UNETIC_APK_PRIVATE_KEY: ${{ secrets.UNETIC_APK_PRIVATE_KEY }}
         run: scripts/build-repository.sh
-      - uses: actions/upload-artifact@v4
+
+      - name: Upload repository
+        uses: actions/upload-artifact@v4
         with:
           name: repository-${{ matrix.package-arch }}
           path: output/
@@ -117,29 +176,45 @@ jobs:
       contents: write
       pages: write
       id-token: write
+
     environment:
       name: github-pages
       url: ${{ steps.pages.outputs.page_url }}
+
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Download repositories
+        uses: actions/download-artifact@v4
         with:
           pattern: repository-*
           path: site
           merge-multiple: true
-      - run: |
+
+      - name: Prepare Pages and release assets
+        run: |
           mkdir -p site/keys release-assets
-          cp keys/unetic.pem site/keys/
+
+          cp keys/unetic-apk-public.pem site/keys/
+
           for arch in aarch64_cortex-a53 mipsel_24kc; do
             tar -C site/25.12.5 -czf "release-assets/unetic-25.12.5-$arch.tar.gz" "$arch"
           done
-          cp manifest.yml keys/unetic.pem release-assets/
-      - uses: actions/configure-pages@v5
-      - uses: actions/upload-pages-artifact@v4
+
+          cp manifest.yml keys/unetic-apk-public.pem release-assets/
+
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v4
         with:
           path: site
-      - id: pages
+      - name: Deploy GitHub Pages
+        id: pages
         uses: actions/deploy-pages@v4
+
       - name: Publish release assets
         env:
           GH_TOKEN: ${{ github.token }}

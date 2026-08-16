@@ -2,9 +2,12 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches:
+      - main
+
   pull_request:
-    branches: [main]
+    branches:
+      - main
 
 permissions:
   contents: read
@@ -12,6 +15,10 @@ permissions:
 jobs:
   validate:
     runs-on: ubuntu-24.04
+
     steps:
-      - uses: actions/checkout@v4
-      - run: scripts/manifest.sh validate
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Validate manifest
+        run: scripts/manifest.sh validate

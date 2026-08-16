@@ -29,7 +29,7 @@ download_sdk() {
 configure_signing() {
 	printf '%s\n' "$UNETIC_APK_PRIVATE_KEY" > "$sdk/private-key.pem"
 	chmod 600 "$sdk/private-key.pem"
-	cp keys/unetic.pem "$sdk/public-key.pem"
+	cp keys/unetic-apk-public.pem "$sdk/public-key.pem"
 
 	"$sdk/staging_dir/host/bin/openssl" ec \
 		-in "$sdk/private-key.pem" -pubout 2>/dev/null \
@@ -68,17 +68,6 @@ build_rust() {
 		"$sdk/package/$package/source/openwrt-binary"
 }
 
-build_web() {
-	(
-		cd sources/unetic-web
-		npm ci
-		npm run build
-	)
-
-	prepare_package unetic-web unetic-web
-	cp -R sources/unetic-web/dist "$sdk/package/unetic-web/source/"
-}
-
 prepare_package() {
 	local repository=$1
 	local package=$2
@@ -115,6 +104,7 @@ download_sdk
 configure_signing
 build_rust unetic-core unetic-core unetic-core
 build_rust unetic-cli unetic-cli unetic-cli
-build_web
+prepare_package unetic-web unetic-web
+cp -R sources/unetic-web/dist "$sdk/package/unetic-web/source/"
 make -C "$sdk" package/unetic-core/compile package/unetic-cli/compile package/unetic-web/compile V=s
 collect_repository
