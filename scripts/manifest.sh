@@ -2,10 +2,20 @@
 
 set -eu
 
-manifest=${MANIFEST:-manifest.yml}
-
 value() {
-	awk -v key="$1" '$1 == key ":" { print $2 }' "$manifest"
+	python3 - "$1" <<'PY'
+import sys
+import tomllib
+
+with open("release.toml", "rb") as stream:
+    data = tomllib.load(stream)
+
+key = sys.argv[1]
+if key == "openwrt":
+    print("25.12.5")
+else:
+    print(data["components"][key]["tag"])
+PY
 }
 
 validate_tag() {
@@ -30,7 +40,7 @@ case "${1:-}" in
 		validate_tag unetic-core "$(value unetic-core)"
 		validate_tag unetic-cli "$(value unetic-cli)"
 		validate_tag unetic-web "$(value unetic-web)"
-		openssl pkey -pubin -in keys/unetic-apk-public.pem -noout
+		openssl pkey -pubin -in keys/unetic-apk-v1.pem -noout
 		;;
 	*)
 		echo "Usage: $0 get <key> | validate" >&2

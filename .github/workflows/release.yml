@@ -85,8 +85,8 @@ jobs:
             sdk-file: openwrt-sdk-25.12.5-ramips-mt7621_gcc-14.3.0_musl.Linux-x86_64.tar.zst
             sdk-sha256: 9962084f4131610e90e48bc864c6ceade0b238f15f335de5f672910532b20e9c
             rust-target: mipsel-unknown-linux-musl
-            rust-toolchain: nightly-2025-08-01
-            rust-build-std: true
+            rust-toolchain: "1.88.0"
+            rust-build-std: false
             toolchain-prefix: mipsel-openwrt-linux-musl
 
     runs-on: ubuntu-24.04
@@ -196,13 +196,13 @@ jobs:
         run: |
           mkdir -p site/keys release-assets
 
-          cp keys/unetic-apk-public.pem site/keys/
+            cp keys/unetic-apk-v1.pem site/keys/
 
           for arch in aarch64_cortex-a53 mipsel_24kc; do
             tar -C site/25.12.5 -czf "release-assets/unetic-25.12.5-$arch.tar.gz" "$arch"
           done
 
-          cp manifest.yml keys/unetic-apk-public.pem release-assets/
+          cp release.toml keys/unetic-apk-v1.pem release-assets/
 
       - name: Configure GitHub Pages
         uses: actions/configure-pages@v5

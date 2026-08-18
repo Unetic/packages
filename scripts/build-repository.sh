@@ -29,7 +29,7 @@ download_sdk() {
 configure_signing() {
 	printf '%s\n' "$UNETIC_APK_PRIVATE_KEY" > "$sdk/private-key.pem"
 	chmod 600 "$sdk/private-key.pem"
-	cp keys/unetic-apk-public.pem "$sdk/public-key.pem"
+	cp keys/unetic-apk-v1.pem "$sdk/public-key.pem"
 
 	"$sdk/staging_dir/host/bin/openssl" ec \
 		-in "$sdk/private-key.pem" -pubout 2>/dev/null \
@@ -53,12 +53,7 @@ build_rust() {
 		export "$cargo_linker=$linker"
 		export RUSTFLAGS="-C target-feature=-crt-static"
 
-		if [ "${RUST_BUILD_STD:-false}" = true ]; then
-			cargo "+$RUST_TOOLCHAIN" build --locked --release \
-				--target "$RUST_TARGET" -Z build-std=std,panic_abort
-		else
-			cargo "+$RUST_TOOLCHAIN" build --locked --release --target "$RUST_TARGET"
-		fi
+		cargo "+$RUST_TOOLCHAIN" build --locked --release --target "$RUST_TARGET"
 	)
 
 	prepare_package "$repository" "$package"
@@ -72,7 +67,7 @@ prepare_package() {
 	local destination="$sdk/package/$package"
 
 	mkdir -p "$destination/source"
-	cp -R "sources/$repository/openwrt/." "$destination/"
+	cp -R "feed/$package/." "$destination/"
 	cp "sources/$repository/LICENSE" "$destination/source/"
 	cp "sources/$repository/Cargo.toml" "$destination/source/" 2>/dev/null || true
 	cp "sources/$repository/package.json" "$destination/source/" 2>/dev/null || true

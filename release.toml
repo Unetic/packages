@@ -1,0 +1,8 @@
+[release]
+version = "0.1.0"
+package_release = 1
+
+[components]
+core = { repository = "Unetic/unetic-core", tag = "v0.1.0" }
+cli = { repository = "Unetic/unetic-cli", tag = "v0.1.0" }
+web = { repository = "Unetic/unetic-web", tag = "v0.1.0" }
