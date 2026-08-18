@@ -11,7 +11,7 @@
           "sdk_file": "openwrt-sdk-25.12.5-mediatek-filogic_gcc-14.3.0_musl.Linux-x86_64.tar.zst",
           "sdk_sha256": "ff4a38a397caa2cfe1c39e18f84ddede14878221b3593c3f2c4cfe24e3ec4c25",
           "rust_target": "aarch64-unknown-linux-musl",
-          "rust_toolchain": "1.88.0",
+          "rust_toolchain": "1.97.1",
           "rust_build_std": false,
           "toolchain_prefix": "aarch64-openwrt-linux-musl"
         },
