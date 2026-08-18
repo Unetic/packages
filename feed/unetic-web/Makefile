@@ -1,7 +1,7 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=unetic-web
-PKG_VERSION:=$(shell sed -n 's/.*"version": "\([^"]*\)".*/\1/p' $(CURDIR)/source/package.json | head -n1)
+PKG_VERSION:=$(strip $(shell cat $(CURDIR)/source/VERSION))
 PKG_RELEASE:=1
 PKG_LICENSE:=GPL-2.0-only
 PKG_LICENSE_FILES:=LICENSE
@@ -18,9 +18,16 @@ define Package/unetic-web
   DEPENDS:=+uhttpd +uhttpd-mod-ubus +rpcd
 endef
 
+define Package/unetic-web/description
+  Static web interface for Unetic, served by uhttpd.
+endef
+
 define Build/Prepare
 	mkdir -p $(PKG_BUILD_DIR)
 	$(CP) $(CURDIR)/source/. $(PKG_BUILD_DIR)/
+endef
+
+define Build/Compile
 endef
 
 define Package/unetic-web/install

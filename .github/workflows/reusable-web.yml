@@ -1,0 +1,145 @@
+name: Reusable Web CI and release
+
+on:
+  workflow_call:
+    inputs:
+      release:
+        description: Publish the already-tested Angular dist as a GitHub Release asset
+        required: false
+        default: false
+        type: boolean
+      ref:
+        description: Branch, SHA or tag to check out. Empty means current event ref.
+        required: false
+        default: ""
+        type: string
+
+jobs:
+  preflight:
+    runs-on: ubuntu-24.04
+    outputs:
+      needs_build: ${{ steps.release.outputs.needs_build }}
+      version: ${{ steps.release.outputs.version }}
+      tag: ${{ steps.release.outputs.tag }}
+      source_sha: ${{ steps.release.outputs.source_sha }}
+    steps:
+      - name: Check out web source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+
+      - name: Prepare CI/release state
+        id: release
+        env:
+          RELEASE: ${{ inputs.release }}
+          REQUESTED_REF: ${{ inputs.ref }}
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          source_sha=$(git rev-parse HEAD)
+          echo "source_sha=$source_sha" >> "$GITHUB_OUTPUT"
+          version=$(python3 -c 'import json; print(json.load(open("package.json"))["version"])')
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+          if [ "$RELEASE" != true ]; then
+            echo 'needs_build=true' >> "$GITHUB_OUTPUT"
+            echo 'tag=' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          tag="$REQUESTED_REF"
+          tag="${tag#refs/tags/}"
+          if ! [[ "$tag" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+            echo "Release ref must be a semantic tag vX.Y.Z, got: $tag" >&2
+            exit 1
+          fi
+          test "$tag" = "v$version"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+          asset="unetic-web-dist-$version.tar.gz"
+          needs_build=true
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            assets=$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name')
+            if grep -Fxq "$asset" <<<"$assets" && grep -Fxq SHA256SUMS <<<"$assets"; then
+              needs_build=false
+            fi
+          fi
+          echo "needs_build=$needs_build" >> "$GITHUB_OUTPUT"
+
+  test:
+    needs: preflight
+    if: ${{ !inputs.release || needs.preflight.outputs.needs_build == 'true' }}
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out web source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.preflight.outputs.source_sha }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Check formatting
+        run: npm run format:check
+
+      - name: Run unit tests
+        run: npm test -- --watch=false
+
+      - name: Test production build
+        run: npm run build
+
+      - name: Pack the exact tested dist
+        if: inputs.release
+        env:
+          VERSION: ${{ needs.preflight.outputs.version }}
+        run: |
+          set -euo pipefail
+          test -d dist/unetic-web/browser
+          mkdir -p release-assets
+          tar -C dist -czf "release-assets/unetic-web-dist-$VERSION.tar.gz" .
+
+      - name: Upload tested dist for release job
+        if: inputs.release
+        uses: actions/upload-artifact@v4
+        with:
+          name: unetic-web-tested-dist
+          path: release-assets/*
+          if-no-files-found: error
+
+  publish-release:
+    needs: [preflight, test]
+    if: ${{ inputs.release && needs.preflight.outputs.needs_build == 'true' }}
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Download exact tested dist
+        uses: actions/download-artifact@v4
+        with:
+          name: unetic-web-tested-dist
+          path: release-assets
+
+      - name: Generate checksum
+        working-directory: release-assets
+        run: sha256sum unetic-web-dist-*.tar.gz > SHA256SUMS
+
+      - name: Create or update GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.preflight.outputs.tag }}
+        run: |
+          set -euo pipefail
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$TAG" release-assets/* --repo "$GITHUB_REPOSITORY" --clobber
+          else
+            gh release create "$TAG" release-assets/* \
+              --repo "$GITHUB_REPOSITORY" \
+              --verify-tag \
+              --generate-notes \
+              --title "$TAG"
+          fi

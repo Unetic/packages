@@ -1,0 +1,272 @@
+name: Reusable Rust CI and release
+
+on:
+  workflow_call:
+    inputs:
+      component_name:
+        description: GitHub/Cargo package name, e.g. unetic-core
+        required: true
+        type: string
+      binary_name:
+        description: Binary produced by Cargo
+        required: true
+        type: string
+      release:
+        description: Build and publish OpenWrt release binaries after CI
+        required: false
+        default: false
+        type: boolean
+      ref:
+        description: Branch, SHA or tag to check out. Empty means current event ref.
+        required: false
+        default: ""
+        type: string
+
+jobs:
+  preflight:
+    runs-on: ubuntu-24.04
+    outputs:
+      needs_build: ${{ steps.release.outputs.needs_build }}
+      matrix: ${{ steps.release.outputs.matrix }}
+      version: ${{ steps.release.outputs.version }}
+      tag: ${{ steps.release.outputs.tag }}
+      deployment_sha: ${{ steps.release.outputs.deployment_sha }}
+      source_sha: ${{ steps.release.outputs.source_sha }}
+    steps:
+      - name: Check out component source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+
+      - name: Check out deployment configuration
+        if: inputs.release
+        uses: actions/checkout@v4
+        with:
+          repository: Unetic/packages
+          ref: main
+          path: .ci/packages
+
+      - name: Prepare CI/release state
+        id: release
+        env:
+          COMPONENT: ${{ inputs.component_name }}
+          RELEASE: ${{ inputs.release }}
+          REQUESTED_REF: ${{ inputs.ref }}
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          source_sha=$(git rev-parse HEAD)
+          echo "source_sha=$source_sha" >> "$GITHUB_OUTPUT"
+          version=$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["package"]["version"])')
+          test -n "$version"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+          if [ "$RELEASE" != true ]; then
+            echo 'needs_build=true' >> "$GITHUB_OUTPUT"
+            echo 'matrix={"include":[]}' >> "$GITHUB_OUTPUT"
+            echo 'tag=' >> "$GITHUB_OUTPUT"
+            echo 'deployment_sha=' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          deployment_sha=$(git -C .ci/packages rev-parse HEAD)
+          echo "deployment_sha=$deployment_sha" >> "$GITHUB_OUTPUT"
+
+          tag="$REQUESTED_REF"
+          tag="${tag#refs/tags/}"
+          if ! [[ "$tag" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+            echo "Release ref must be a semantic tag vX.Y.Z, got: $tag" >&2
+            exit 1
+          fi
+          test "$tag" = "v$version"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+          matrix=$(jq -c '{include: [
+            .apk_releases[] as $r |
+            $r.targets[] |
+            {
+              openwrt: $r.openwrt,
+              architecture: .architecture,
+              target: .target,
+              subtarget: .subtarget,
+              sdk_file: .sdk_file,
+              sdk_sha256: .sdk_sha256,
+              rust_target: .rust_target,
+              rust_toolchain: .rust_toolchain,
+              rust_build_std: .rust_build_std,
+              toolchain_prefix: .toolchain_prefix
+            }
+          ]}' .ci/packages/config/targets.json)
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+
+          needs_build=true
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            assets=$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name')
+            complete=true
+            while IFS= read -r expected; do
+              grep -Fxq "$expected" <<<"$assets" || complete=false
+            done < <(
+              jq -r --arg component "$COMPONENT" --arg version "$version" '
+                .apk_releases[] as $r |
+                $r.targets[] |
+                "\($component)-\($version)-openwrt-\($r.openwrt)-\(.architecture)"
+              ' .ci/packages/config/targets.json
+              echo SHA256SUMS
+            )
+            if [ "$complete" = true ]; then
+              needs_build=false
+            fi
+          fi
+          echo "needs_build=$needs_build" >> "$GITHUB_OUTPUT"
+
+  test:
+    needs: preflight
+    if: ${{ !inputs.release || needs.preflight.outputs.needs_build == 'true' }}
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out component source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.preflight.outputs.source_sha }}
+
+      - name: Install repository-pinned Rust toolchain
+        run: |
+          set -euo pipefail
+          toolchain=$(python3 -c 'import tomllib; print(tomllib.load(open("rust-toolchain.toml", "rb"))["toolchain"]["channel"])')
+          rustup toolchain install "$toolchain" --profile minimal --component clippy,rustfmt
+          rustup default "$toolchain"
+
+      - name: Cache Cargo dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-ci-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+
+      - name: Check formatting
+        run: cargo fmt --check
+
+      - name: Run Clippy
+        run: cargo clippy --locked --all-targets --all-features -- -D warnings
+
+      - name: Run tests
+        run: cargo test --locked --all-targets --all-features
+
+      - name: Test release build
+        run: cargo build --locked --release --all-features
+
+  build-release:
+    needs: [preflight, test]
+    if: ${{ inputs.release && needs.preflight.outputs.needs_build == 'true' }}
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.preflight.outputs.matrix) }}
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out component source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.preflight.outputs.source_sha }}
+
+      - name: Check out deployment helpers
+        uses: actions/checkout@v4
+        with:
+          repository: Unetic/packages
+          ref: ${{ needs.preflight.outputs.deployment_sha }}
+          path: .ci/packages
+
+      - name: Download pinned OpenWrt SDK
+        run: |
+          .ci/packages/scripts/download-openwrt-sdk.sh \
+            '${{ matrix.openwrt }}' \
+            '${{ matrix.target }}' \
+            '${{ matrix.subtarget }}' \
+            '${{ matrix.sdk_file }}' \
+            '${{ matrix.sdk_sha256 }}' \
+            "$RUNNER_TEMP/openwrt-sdk"
+
+      - name: Install Rust cross toolchain
+        env:
+          RUST_BUILD_STD: ${{ matrix.rust_build_std }}
+          RUST_TARGET: ${{ matrix.rust_target }}
+          RUST_TOOLCHAIN: ${{ matrix.rust_toolchain }}
+        run: |
+          set -euo pipefail
+          if [ "$RUST_BUILD_STD" = true ]; then
+            rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal --component rust-src
+          else
+            rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal --target "$RUST_TARGET"
+          fi
+
+      - name: Cross-build release binary
+        env:
+          BINARY_NAME: ${{ inputs.binary_name }}
+          COMPONENT: ${{ inputs.component_name }}
+          VERSION: ${{ needs.preflight.outputs.version }}
+          RUST_BUILD_STD: ${{ matrix.rust_build_std }}
+          RUST_TARGET: ${{ matrix.rust_target }}
+          RUST_TOOLCHAIN: ${{ matrix.rust_toolchain }}
+          TOOLCHAIN_PREFIX: ${{ matrix.toolchain_prefix }}
+          OPENWRT_VERSION: ${{ matrix.openwrt }}
+          PACKAGE_ARCH: ${{ matrix.architecture }}
+        run: |
+          set -euo pipefail
+          linker=$(find "$RUNNER_TEMP/openwrt-sdk/staging_dir" -type f -name "$TOOLCHAIN_PREFIX-gcc" -print -quit)
+          test -n "$linker"
+          cargo_linker="CARGO_TARGET_$(echo "$RUST_TARGET" | tr '[:lower:]-' '[:upper:]_')_LINKER"
+          export "$cargo_linker=$linker"
+          export RUSTFLAGS='-C target-feature=-crt-static'
+
+          if [ "$RUST_BUILD_STD" = true ]; then
+            cargo "+$RUST_TOOLCHAIN" build --locked --release --target "$RUST_TARGET" \
+              -Z build-std=std,panic_abort
+          else
+            cargo "+$RUST_TOOLCHAIN" build --locked --release --target "$RUST_TARGET"
+          fi
+
+          mkdir -p release-assets
+          asset="$COMPONENT-$VERSION-openwrt-$OPENWRT_VERSION-$PACKAGE_ARCH"
+          install -m 755 "target/$RUST_TARGET/release/$BINARY_NAME" "release-assets/$asset"
+          file "release-assets/$asset"
+
+      - name: Upload binary for release job
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ inputs.component_name }}-${{ matrix.openwrt }}-${{ matrix.architecture }}
+          path: release-assets/*
+          if-no-files-found: error
+
+  publish-release:
+    needs: [preflight, test, build-release]
+    if: ${{ inputs.release && needs.preflight.outputs.needs_build == 'true' }}
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Download all release binaries
+        uses: actions/download-artifact@v4
+        with:
+          pattern: release-${{ inputs.component_name }}-*
+          path: release-assets
+          merge-multiple: true
+
+      - name: Generate checksums
+        working-directory: release-assets
+        run: sha256sum ${{ inputs.component_name }}-* > SHA256SUMS
+
+      - name: Create or update GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.preflight.outputs.tag }}
+        run: |
+          set -euo pipefail
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$TAG" release-assets/* --repo "$GITHUB_REPOSITORY" --clobber
+          else
+            gh release create "$TAG" release-assets/* \
+              --repo "$GITHUB_REPOSITORY" \
+              --verify-tag \
+              --generate-notes \
+              --title "$TAG"
+          fi

@@ -1,75 +1,65 @@
 # Unetic Packages
 
-Signed APK repository for installing and updating
-[Unetic](https://github.com/Unetic) on OpenWrt.
+`Unetic/packages` is the single production deployment repository for Unetic on OpenWrt APK-based releases.
 
-This repository is the single production publisher for:
+## Release contract
 
-- `unetic-core`
-- `unetic-web`
-- `unetic-cli`
+A packages release `vX.Y.Z` consumes the already successful component releases with exactly the same tag:
 
-Component versions are pinned in [`release.toml`](./release.toml); the generated
-commit locks are stored in [`release.lock.json`](./release.lock.json).
+- `Unetic/unetic-core` `vX.Y.Z`
+- `Unetic/unetic-cli` `vX.Y.Z`
+- `Unetic/unetic-web` `vX.Y.Z`
 
-## Repository layout
+There is no second version manifest to drift out of sync.
 
-Current OpenWrt baseline: `25.12.5`.
+Component repositories build and publish immutable release inputs. Rust repositories publish one binary for every OpenWrt/architecture tuple in `config/targets.json`. Web publishes one `unetic-web-dist-X.Y.Z.tar.gz`; Angular is never rebuilt by `packages`.
+
+`packages` wraps those release inputs into APKs, signs each `packages.adb` repository index, deploys the repository tree to GitHub Pages, and attaches APK/repository artifacts to the GitHub Release.
+
+## Supported APK matrix
+
+The source of truth is `config/targets.json`. Adding an APK-capable OpenWrt release or architecture is a data change there. The Angular dist is independent of this matrix and remains one build per Unetic version.
+
+Current repository layout on Pages:
 
 ```text
-25.12.5/
-├── aarch64_cortex-a53/
-│   ├── *.apk
-│   └── packages.adb
-└── mipsel_24kc/
-    ├── *.apk
-    └── packages.adb
+<openwrt-version>/
+  <apk-architecture>/
+    unetic-core-*.apk
+    unetic-cli-*.apk
+    unetic-web-*.apk
+    packages.adb
+keys/
+  unetic-apk-v1.pem
 ```
 
-Supported build targets:
-
-| OpenWrt target | Package architecture |
-| --- | --- |
-| `mediatek/filogic` | `aarch64_cortex-a53` |
-| `ramips/mt7621` | `mipsel_24kc` |
-
 ## Install
+
+For OpenWrt `25.12.5`:
 
 ```sh
 ARCH="$(cat /etc/apk/arch)"
 
 wget -O /etc/apk/keys/unetic-apk-v1.pem \
-    https://unetic.github.io/packages/keys/unetic-apk-v1.pem
+  https://unetic.github.io/packages/keys/unetic-apk-v1.pem
 
 echo "https://unetic.github.io/packages/25.12.5/$ARCH/packages.adb" \
-    >> /etc/apk/repositories.d/customfeeds.list
+  >> /etc/apk/repositories.d/customfeeds.list
 
 apk update
 apk add unetic-core unetic-web
-```
-
-Optional CLI:
-
-```sh
+# optional
 apk add unetic-cli
 ```
 
-## Releases
+## CI/CD behavior
 
-Publishing is tag-driven.
+Branch pushes and pull requests only run non-publishing CI. Tag/release workflows are separate.
 
-1. Update component tags in `release.toml`.
-2. Merge the change into `main`.
-3. Create and push a `v*` tag in this repository.
-4. GitHub Actions builds both package architectures.
-5. APKs and `packages.adb` are signed with the Unetic APK signing key.
-6. The repository is deployed to GitHub Pages and attached to the GitHub Release.
+A component tag or published release `vX.Y.Z` runs CI first. Only after CI succeeds are release assets created/updated. `workflow_dispatch` exists so an old tag can be republished after a workflow migration without deleting and recreating the tag.
 
-Pushes and pull requests to `main` validate the repository but never publish it.
+A `packages` tag or published release `vX.Y.Z` first verifies all three component releases and checksums. It then builds APKs, deploys Pages, and finally marks the GitHub Release complete by uploading `unetic-packages-X.Y.Z-manifest.json`.
 
-The private signing key is stored only as the `UNETIC_APK_PRIVATE_KEY`
-GitHub Actions secret. Only the public key is committed.
+## Secret
 
-## License
-
-GPL-2.0-only.
+The only production signing secret is repository secret `UNETIC_APK_PRIVATE_KEY` in `Unetic/packages`. The matching public key is committed as `keys/unetic-apk-v1.pem`.

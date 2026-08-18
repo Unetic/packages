@@ -1,208 +1,355 @@
-name: Publish repository
+name: Release APK repository
 
 on:
   push:
     tags:
       - "v*"
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing semantic tag to publish, e.g. v0.1.0
+        required: true
+        type: string
+
+concurrency:
+  group: packages-release-${{ inputs.tag || github.event.release.tag_name || github.ref_name }}
+  cancel-in-progress: false
 
 permissions:
   contents: read
 
 jobs:
-  manifest:
+  preflight:
     runs-on: ubuntu-24.04
     outputs:
-      core: ${{ steps.versions.outputs.core }}
-      cli: ${{ steps.versions.outputs.cli }}
-      web: ${{ steps.versions.outputs.web }}
-
+      needs_build: ${{ steps.prepare.outputs.needs_build }}
+      tag: ${{ steps.prepare.outputs.tag }}
+      version: ${{ steps.prepare.outputs.version }}
+      target_matrix: ${{ steps.prepare.outputs.target_matrix }}
+      web_matrix: ${{ steps.prepare.outputs.web_matrix }}
+      packaging_ref: ${{ steps.prepare.outputs.packaging_ref }}
     steps:
-      - name: Check out repository
-        uses: actions/checkout@v4
-
-      - name: Validate manifest
-        run: scripts/manifest.sh validate
-
-      - name: Read component versions
-        id: versions
-        run: |
-          {
-            echo "core=$(scripts/manifest.sh get unetic-core)"
-            echo "cli=$(scripts/manifest.sh get unetic-cli)"
-            echo "web=$(scripts/manifest.sh get unetic-web)"
-          } >> "$GITHUB_OUTPUT"
-
-  web:
-    needs: manifest
-    runs-on: ubuntu-24.04
-
-    steps:
-      - name: Check out web source
-        uses: actions/checkout@v4
-        with:
-          repository: Unetic/unetic-web
-          ref: ${{ needs.manifest.outputs.web }}
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: "24"
-          cache: npm
-
-      - name: Build production web assets
-        run: |
-          npm ci
-          npm run build
-
-      - name: Upload web assets
-        uses: actions/upload-artifact@v4
-        with:
-          name: web-assets
-          path: dist/
-          if-no-files-found: error
-
-  build:
-    needs:
-      - manifest
-      - web
-
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - package-arch: aarch64_cortex-a53
-            openwrt-target: mediatek
-            openwrt-subtarget: filogic
-            sdk-file: openwrt-sdk-25.12.5-mediatek-filogic_gcc-14.3.0_musl.Linux-x86_64.tar.zst
-            sdk-sha256: ff4a38a397caa2cfe1c39e18f84ddede14878221b3593c3f2c4cfe24e3ec4c25
-            rust-target: aarch64-unknown-linux-musl
-            rust-toolchain: "1.88.0"
-            rust-build-std: false
-            toolchain-prefix: aarch64-openwrt-linux-musl
-          - package-arch: mipsel_24kc
-            openwrt-target: ramips
-            openwrt-subtarget: mt7621
-            sdk-file: openwrt-sdk-25.12.5-ramips-mt7621_gcc-14.3.0_musl.Linux-x86_64.tar.zst
-            sdk-sha256: 9962084f4131610e90e48bc864c6ceade0b238f15f335de5f672910532b20e9c
-            rust-target: mipsel-unknown-linux-musl
-            rust-toolchain: "1.88.0"
-            rust-build-std: false
-            toolchain-prefix: mipsel-openwrt-linux-musl
-
-    runs-on: ubuntu-24.04
-
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@v4
-
-      - name: Check out core source
-        uses: actions/checkout@v4
-        with:
-          repository: Unetic/unetic-core
-          ref: ${{ needs.manifest.outputs.core }}
-          path: sources/unetic-core
-
-      - name: Check out CLI source
-        uses: actions/checkout@v4
-        with:
-          repository: Unetic/unetic-cli
-          ref: ${{ needs.manifest.outputs.cli }}
-          path: sources/unetic-cli
-
-      - name: Check out web source
-        uses: actions/checkout@v4
-        with:
-          repository: Unetic/unetic-web
-          ref: ${{ needs.manifest.outputs.web }}
-          path: sources/unetic-web
-
-      - name: Download web assets
-        uses: actions/download-artifact@v4
-        with:
-          name: web-assets
-          path: sources/unetic-web/dist
-
-      - name: Install Rust toolchain
+      - name: Resolve requested tag
+        id: tag
         env:
-          RUST_BUILD_STD: ${{ matrix.rust-build-std }}
-          RUST_TARGET: ${{ matrix.rust-target }}
-          RUST_TOOLCHAIN: ${{ matrix.rust-toolchain }}
+          REQUESTED_TAG: ${{ inputs.tag || github.event.release.tag_name || github.ref_name }}
         run: |
-          if [ "$RUST_BUILD_STD" = true ]; then
-            rustup toolchain install "$RUST_TOOLCHAIN" \
-              --profile minimal \
-              --component rust-src
+          set -euo pipefail
+          tag="${REQUESTED_TAG#refs/tags/}"
+          if ! [[ "$tag" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+            echo "Release tag must be vX.Y.Z, got: $tag" >&2
+            exit 1
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+      - name: Select immutable packaging configuration ref
+        id: packaging
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" = workflow_dispatch ]; then
+            ref="$GITHUB_SHA"
           else
-            rustup toolchain install "$RUST_TOOLCHAIN" \
-              --profile minimal \
-              --target "$RUST_TARGET"
+            ref="$TAG"
+          fi
+          echo "ref=$ref" >> "$GITHUB_OUTPUT"
+
+      - name: Check out packaging configuration
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.packaging.outputs.ref }}
+
+      - name: Validate repository configuration
+        run: scripts/validate-ci-layout.sh
+
+      - name: Verify component releases and build matrices
+        id: prepare
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          set -euo pipefail
+          version="${TAG#v}"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "packaging_ref=${{ steps.packaging.outputs.ref }}" >> "$GITHUB_OUTPUT"
+
+          target_matrix=$(jq -c '{include: [
+            .apk_releases[] as $r |
+            $r.targets[] |
+            {
+              openwrt: $r.openwrt,
+              architecture: .architecture,
+              target: .target,
+              subtarget: .subtarget,
+              sdk_file: .sdk_file,
+              sdk_sha256: .sdk_sha256
+            }
+          ]}' config/targets.json)
+          echo "target_matrix=$target_matrix" >> "$GITHUB_OUTPUT"
+
+          web_matrix=$(jq -c '{include: [
+            .apk_releases[] |
+            {
+              openwrt: .openwrt,
+              architecture: .targets[0].architecture,
+              target: .targets[0].target,
+              subtarget: .targets[0].subtarget,
+              sdk_file: .targets[0].sdk_file,
+              sdk_sha256: .targets[0].sdk_sha256
+            }
+          ]}' config/targets.json)
+          echo "web_matrix=$web_matrix" >> "$GITHUB_OUTPUT"
+
+          marker="unetic-packages-$version-manifest.json"
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' | grep -Fxq "$marker"; then
+              echo 'needs_build=false' >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
           fi
 
-      - name: Cache Cargo dependencies
-        uses: actions/cache@v4
+          # packages vX.Y.Z consumes exactly vX.Y.Z from every component. No manifest drift.
+          for repo in unetic-core unetic-cli unetic-web; do
+            gh release view "$TAG" --repo "Unetic/$repo" >/dev/null
+          done
+
+          for component in unetic-core unetic-cli; do
+            assets=$(gh release view "$TAG" --repo "Unetic/$component" --json assets --jq '.assets[].name')
+            grep -Fxq SHA256SUMS <<<"$assets"
+            while IFS= read -r expected; do
+              grep -Fxq "$expected" <<<"$assets" || {
+                echo "Missing $component release asset: $expected" >&2
+                exit 1
+              }
+            done < <(
+              jq -r --arg component "$component" --arg version "$version" '
+                .apk_releases[] as $r |
+                $r.targets[] |
+                "\($component)-\($version)-openwrt-\($r.openwrt)-\(.architecture)"
+              ' config/targets.json
+            )
+          done
+
+          web_assets=$(gh release view "$TAG" --repo Unetic/unetic-web --json assets --jq '.assets[].name')
+          grep -Fxq "unetic-web-dist-$version.tar.gz" <<<"$web_assets"
+          grep -Fxq SHA256SUMS <<<"$web_assets"
+
+          echo 'needs_build=true' >> "$GITHUB_OUTPUT"
+
+  web-apk:
+    needs: preflight
+    if: ${{ needs.preflight.outputs.needs_build == 'true' }}
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.preflight.outputs.web_matrix) }}
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out packages tag
+        uses: actions/checkout@v4
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            sources/unetic-core/target
-            sources/unetic-cli/target
-          key: cargo-${{ runner.os }}-${{ matrix.rust-target }}-${{ hashFiles('sources/**/Cargo.lock') }}
+          ref: ${{ needs.preflight.outputs.packaging_ref }}
 
-      - name: Build signed repository
+      - name: Download and verify web dist release asset
         env:
-          SDK_FILE: ${{ matrix.sdk-file }}
-          SDK_SHA256: ${{ matrix.sdk-sha256 }}
-          OPENWRT_TARGET: ${{ matrix.openwrt-target }}
-          OPENWRT_SUBTARGET: ${{ matrix.openwrt-subtarget }}
-          PACKAGE_ARCH: ${{ matrix.package-arch }}
-          RUST_TARGET: ${{ matrix.rust-target }}
-          RUST_TOOLCHAIN: ${{ matrix.rust-toolchain }}
-          RUST_BUILD_STD: ${{ matrix.rust-build-std }}
-          TOOLCHAIN_PREFIX: ${{ matrix.toolchain-prefix }}
-          UNETIC_APK_PRIVATE_KEY: ${{ secrets.UNETIC_APK_PRIVATE_KEY }}
-        run: scripts/build-repository.sh
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.preflight.outputs.tag }}
+          VERSION: ${{ needs.preflight.outputs.version }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/web-release" "$RUNNER_TEMP/web-payload/dist"
+          gh release download "$TAG" --repo Unetic/unetic-web \
+            --pattern "unetic-web-dist-$VERSION.tar.gz" \
+            --pattern SHA256SUMS \
+            --dir "$RUNNER_TEMP/web-release"
+          (cd "$RUNNER_TEMP/web-release" && sha256sum -c SHA256SUMS --ignore-missing)
+          tar -C "$RUNNER_TEMP/web-payload/dist" -xzf "$RUNNER_TEMP/web-release/unetic-web-dist-$VERSION.tar.gz"
+          test -d "$RUNNER_TEMP/web-payload/dist/unetic-web/browser"
 
-      - name: Upload repository
+      - name: Download representative OpenWrt SDK
+        run: |
+          scripts/download-openwrt-sdk.sh \
+            '${{ matrix.openwrt }}' \
+            '${{ matrix.target }}' \
+            '${{ matrix.subtarget }}' \
+            '${{ matrix.sdk_file }}' \
+            '${{ matrix.sdk_sha256 }}' \
+            "$RUNNER_TEMP/openwrt-sdk"
+
+      - name: Build architecture-independent web APK once for this OpenWrt version
+        run: |
+          scripts/build-apk.sh \
+            unetic-web \
+            '${{ needs.preflight.outputs.version }}' \
+            "$RUNNER_TEMP/openwrt-sdk" \
+            "$RUNNER_TEMP/web-payload" \
+            "$RUNNER_TEMP/web-apk"
+
+      - name: Upload reusable web APK
         uses: actions/upload-artifact@v4
         with:
-          name: repository-${{ matrix.package-arch }}
-          path: output/
+          name: web-apk-${{ matrix.openwrt }}
+          path: ${{ runner.temp }}/web-apk/*.apk
+          if-no-files-found: error
+
+  build-repository:
+    needs: [preflight, web-apk]
+    if: ${{ needs.preflight.outputs.needs_build == 'true' }}
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.preflight.outputs.target_matrix) }}
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out packages tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.preflight.outputs.packaging_ref }}
+
+      - name: Download pinned OpenWrt SDK
+        run: |
+          scripts/download-openwrt-sdk.sh \
+            '${{ matrix.openwrt }}' \
+            '${{ matrix.target }}' \
+            '${{ matrix.subtarget }}' \
+            '${{ matrix.sdk_file }}' \
+            '${{ matrix.sdk_sha256 }}' \
+            "$RUNNER_TEMP/openwrt-sdk"
+
+      - name: Download and verify released core binary
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.preflight.outputs.tag }}
+          VERSION: ${{ needs.preflight.outputs.version }}
+          OPENWRT_VERSION: ${{ matrix.openwrt }}
+          PACKAGE_ARCH: ${{ matrix.architecture }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/core-release" "$RUNNER_TEMP/core-payload"
+          asset="unetic-core-$VERSION-openwrt-$OPENWRT_VERSION-$PACKAGE_ARCH"
+          gh release download "$TAG" --repo Unetic/unetic-core \
+            --pattern "$asset" --pattern SHA256SUMS --dir "$RUNNER_TEMP/core-release"
+          (cd "$RUNNER_TEMP/core-release" && sha256sum -c SHA256SUMS --ignore-missing)
+          install -m 755 "$RUNNER_TEMP/core-release/$asset" "$RUNNER_TEMP/core-payload/openwrt-binary"
+
+      - name: Download and verify released CLI binary
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.preflight.outputs.tag }}
+          VERSION: ${{ needs.preflight.outputs.version }}
+          OPENWRT_VERSION: ${{ matrix.openwrt }}
+          PACKAGE_ARCH: ${{ matrix.architecture }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/cli-release" "$RUNNER_TEMP/cli-payload"
+          asset="unetic-cli-$VERSION-openwrt-$OPENWRT_VERSION-$PACKAGE_ARCH"
+          gh release download "$TAG" --repo Unetic/unetic-cli \
+            --pattern "$asset" --pattern SHA256SUMS --dir "$RUNNER_TEMP/cli-release"
+          (cd "$RUNNER_TEMP/cli-release" && sha256sum -c SHA256SUMS --ignore-missing)
+          install -m 755 "$RUNNER_TEMP/cli-release/$asset" "$RUNNER_TEMP/cli-payload/openwrt-binary"
+
+      - name: Download web APK built once for this OpenWrt version
+        uses: actions/download-artifact@v4
+        with:
+          name: web-apk-${{ matrix.openwrt }}
+          path: ${{ runner.temp }}/web-apk
+
+      - name: Build core and CLI APKs around released binaries
+        run: |
+          set -euo pipefail
+          scripts/build-apk.sh unetic-core '${{ needs.preflight.outputs.version }}' \
+            "$RUNNER_TEMP/openwrt-sdk" "$RUNNER_TEMP/core-payload" "$RUNNER_TEMP/core-apk"
+          scripts/build-apk.sh unetic-cli '${{ needs.preflight.outputs.version }}' \
+            "$RUNNER_TEMP/openwrt-sdk" "$RUNNER_TEMP/cli-payload" "$RUNNER_TEMP/cli-apk"
+
+      - name: Assemble and sign architecture repository
+        env:
+          UNETIC_APK_PRIVATE_KEY: ${{ secrets.UNETIC_APK_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          repo="$RUNNER_TEMP/repository-site/${{ matrix.openwrt }}/${{ matrix.architecture }}"
+          mkdir -p "$repo"
+          cp "$RUNNER_TEMP/core-apk/"*.apk "$repo/"
+          cp "$RUNNER_TEMP/cli-apk/"*.apk "$repo/"
+          cp "$RUNNER_TEMP/web-apk/"*.apk "$repo/"
+
+          private_key="$RUNNER_TEMP/unetic-apk-private.pem"
+          printf '%s\n' "$UNETIC_APK_PRIVATE_KEY" > "$private_key"
+          chmod 600 "$private_key"
+          scripts/sign-repository.sh "$RUNNER_TEMP/openwrt-sdk" "$repo" "$private_key"
+
+      - name: Upload repository tree
+        uses: actions/upload-artifact@v4
+        with:
+          name: repository-${{ matrix.openwrt }}-${{ matrix.architecture }}
+          path: ${{ runner.temp }}/repository-site/
           if-no-files-found: error
 
   publish:
-    needs: build
+    needs: [preflight, build-repository]
+    if: ${{ needs.preflight.outputs.needs_build == 'true' }}
     runs-on: ubuntu-24.04
     permissions:
       contents: write
       pages: write
       id-token: write
-
     environment:
       name: github-pages
       url: ${{ steps.pages.outputs.page_url }}
-
     steps:
-      - name: Check out repository
+      - name: Check out packages tag
         uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.preflight.outputs.packaging_ref }}
 
-      - name: Download repositories
+      - name: Download all repository trees
         uses: actions/download-artifact@v4
         with:
           pattern: repository-*
           path: site
           merge-multiple: true
 
-      - name: Prepare Pages and release assets
+      - name: Prepare Pages and GitHub Release assets
+        env:
+          TAG: ${{ needs.preflight.outputs.tag }}
+          VERSION: ${{ needs.preflight.outputs.version }}
         run: |
+          set -euo pipefail
           mkdir -p site/keys release-assets
+          cp keys/unetic-apk-v1.pem site/keys/unetic-apk-v1.pem
+          cp keys/unetic-apk-v1.pem release-assets/unetic-apk-v1.pem
 
-            cp keys/unetic-apk-v1.pem site/keys/
+          while IFS= read -r apk; do
+            rel=${apk#site/}
+            openwrt=${rel%%/*}
+            rest=${rel#*/}
+            arch=${rest%%/*}
+            base=$(basename "$apk")
+            if [[ "$base" == unetic-web-* ]]; then
+              destination="release-assets/$openwrt-all-$base"
+              [ -e "$destination" ] || cp "$apk" "$destination"
+            else
+              cp "$apk" "release-assets/$openwrt-$arch-$base"
+            fi
+          done < <(find site -type f -name '*.apk' -print | sort)
 
-          for arch in aarch64_cortex-a53 mipsel_24kc; do
-            tar -C site/25.12.5 -czf "release-assets/unetic-25.12.5-$arch.tar.gz" "$arch"
+          jq -r '.apk_releases[] as $r | $r.targets[] | "\($r.openwrt) \(.architecture)"' config/targets.json |
+          while read -r openwrt arch; do
+            tar -C "site/$openwrt" -czf "release-assets/unetic-repository-$openwrt-$arch.tar.gz" "$arch"
           done
 
-          cp release.toml keys/unetic-apk-v1.pem release-assets/
+          jq -n \
+            --arg tag "$TAG" \
+            --arg version "$VERSION" \
+            --arg commit "$GITHUB_SHA" \
+            '{schema:1, tag:$tag, version:$version, packages_commit:$commit,
+              components:{core:$tag, cli:$tag, web:$tag}}' \
+            > "release-assets/unetic-packages-$VERSION-manifest.json"
+
+          (cd release-assets && sha256sum * > SHA256SUMS)
 
       - name: Configure GitHub Pages
         uses: actions/configure-pages@v5
@@ -211,17 +358,23 @@ jobs:
         uses: actions/upload-pages-artifact@v4
         with:
           path: site
-      - name: Deploy GitHub Pages
+
+      - name: Deploy APK repository to GitHub Pages
         id: pages
         uses: actions/deploy-pages@v4
 
-      - name: Publish release assets
+      - name: Create or update packages GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ github.ref_name }}
+          TAG: ${{ needs.preflight.outputs.tag }}
         run: |
-          if gh release view "$TAG" >/dev/null 2>&1; then
-            gh release upload "$TAG" release-assets/* --clobber
+          set -euo pipefail
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$TAG" release-assets/* --repo "$GITHUB_REPOSITORY" --clobber
           else
-            gh release create "$TAG" release-assets/* --generate-notes --verify-tag
+            gh release create "$TAG" release-assets/* \
+              --repo "$GITHUB_REPOSITORY" \
+              --verify-tag \
+              --generate-notes \
+              --title "$TAG"
           fi
