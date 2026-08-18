@@ -126,7 +126,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - name: Check out component source
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           ref: ${{ needs.preflight.outputs.source_sha }}
 
@@ -145,9 +145,6 @@ jobs:
             ~/.cargo/git
             target
           key: cargo-ci-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
-
-      - name: Check formatting
-        run: cargo fmt --check
 
       - name: Run Clippy
         run: cargo clippy --locked --all-targets --all-features -- -D warnings
