@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Existing semantic tag to publish, e.g. v0.1.0
+        description: Existing packages tag, for a controlled retry
         required: true
         type: string
 
@@ -22,273 +22,80 @@ jobs:
   preflight:
     runs-on: ubuntu-24.04
     outputs:
-      needs_build: ${{ steps.prepare.outputs.needs_build }}
       tag: ${{ steps.prepare.outputs.tag }}
       version: ${{ steps.prepare.outputs.version }}
-      target_matrix: ${{ steps.prepare.outputs.target_matrix }}
-      web_matrix: ${{ steps.prepare.outputs.web_matrix }}
-      packaging_ref: ${{ steps.prepare.outputs.packaging_ref }}
+      architectures: ${{ steps.prepare.outputs.architectures }}
     steps:
-      - name: Resolve requested tag
-        id: tag
-        env:
-          REQUESTED_TAG: ${{ inputs.tag || github.ref_name }}
-        run: |
-          set -euo pipefail
-          tag="${REQUESTED_TAG#refs/tags/}"
-          if ! [[ "$tag" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
-            echo "Release tag must be vX.Y.Z, got: $tag" >&2
-            exit 1
-          fi
-          echo "tag=$tag" >> "$GITHUB_OUTPUT"
-
-      - name: Select immutable packaging configuration ref
-        id: packaging
-        env:
-          EVENT_NAME: ${{ github.event_name }}
-          TAG: ${{ steps.tag.outputs.tag }}
-        run: |
-          set -euo pipefail
-          if [ "$EVENT_NAME" = workflow_dispatch ]; then
-            ref="$GITHUB_SHA"
-          else
-            ref="$TAG"
-          fi
-          echo "ref=$ref" >> "$GITHUB_OUTPUT"
-
-      - name: Check out packaging configuration
+      - name: Check out packages
         uses: actions/checkout@v7.0.1
         with:
-          ref: ${{ steps.packaging.outputs.ref }}
+          ref: ${{ inputs.tag || github.ref_name }}
 
-      - name: Validate repository configuration
-        run: scripts/validate-ci-layout.sh
-
-      - name: Verify component releases and build matrices
+      - name: Validate tag and component releases
         id: prepare
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ steps.tag.outputs.tag }}
+          REQUESTED_TAG: ${{ inputs.tag || github.ref_name }}
         run: |
           set -euo pipefail
-          version="${TAG#v}"
-          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+          tag="${REQUESTED_TAG#refs/tags/}"
+          [[ "$tag" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
+          version="${tag#v}"
+
+          for repository in unetic-core unetic-cli unetic-web; do
+            gh release view "$tag" --repo "Unetic/$repository" >/dev/null
+          done
+
+          jq -e --argjson expected '2' '.schema == $expected and .openwrt == "25.12" and (.architectures | length == 2)' config/targets.json >/dev/null
+
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
           echo "version=$version" >> "$GITHUB_OUTPUT"
-          echo "packaging_ref=${{ steps.packaging.outputs.ref }}" >> "$GITHUB_OUTPUT"
+          echo "architectures=$(jq -c .architectures config/targets.json)" >> "$GITHUB_OUTPUT"
 
-          target_matrix=$(jq -c '{include: [
-            .apk_releases[] as $r |
-            $r.targets[] |
-            {
-              openwrt: $r.openwrt,
-              architecture: .architecture,
-              target: .target,
-              subtarget: .subtarget,
-              sdk_file: .sdk_file,
-              sdk_sha256: .sdk_sha256
-            }
-          ]}' config/targets.json)
-          echo "target_matrix=$target_matrix" >> "$GITHUB_OUTPUT"
-
-          web_matrix=$(jq -c '{include: [
-            .apk_releases[] |
-            {
-              openwrt: .openwrt,
-              architecture: .targets[0].architecture,
-              target: .targets[0].target,
-              subtarget: .targets[0].subtarget,
-              sdk_file: .targets[0].sdk_file,
-              sdk_sha256: .targets[0].sdk_sha256
-            }
-          ]}' config/targets.json)
-          echo "web_matrix=$web_matrix" >> "$GITHUB_OUTPUT"
-
-          marker="unetic-packages-$version-manifest.json"
-          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' | grep -Fxq "$marker"; then
-              echo 'needs_build=false' >> "$GITHUB_OUTPUT"
-              exit 0
-            fi
-          fi
-
-          # packages vX.Y.Z consumes exactly vX.Y.Z from every component. No manifest drift.
-          for repo in unetic-core unetic-cli unetic-web; do
-            gh release view "$TAG" --repo "Unetic/$repo" >/dev/null
-          done
-
-          for component in unetic-core unetic-cli; do
-            assets=$(gh release view "$TAG" --repo "Unetic/$component" --json assets --jq '.assets[].name')
-            grep -Fxq SHA256SUMS <<<"$assets"
-            while IFS= read -r expected; do
-              grep -Fxq "$expected" <<<"$assets" || {
-                echo "Missing $component release asset: $expected" >&2
-                exit 1
-              }
-            done < <(
-              jq -r --arg component "$component" --arg version "$version" '
-                .apk_releases[] as $r |
-                $r.targets[] |
-                "\($component)-\($version)-openwrt-\($r.openwrt)-\(.architecture)"
-              ' config/targets.json
-            )
-          done
-
-          web_assets=$(gh release view "$TAG" --repo Unetic/unetic-web --json assets --jq '.assets[].name')
-          grep -Fxq "unetic-web-dist-$version.tar.gz" <<<"$web_assets"
-          grep -Fxq SHA256SUMS <<<"$web_assets"
-
-          echo 'needs_build=true' >> "$GITHUB_OUTPUT"
-
-  web-apk:
+  build:
     needs: preflight
-    if: ${{ needs.preflight.outputs.needs_build == 'true' }}
     strategy:
       fail-fast: false
-      matrix: ${{ fromJSON(needs.preflight.outputs.web_matrix) }}
+      matrix:
+        architecture: ${{ fromJSON(needs.preflight.outputs.architectures) }}
     runs-on: ubuntu-24.04
+    permissions:
+      contents: read
     steps:
-      - name: Check out packages tag
+      - name: Check out packages
         uses: actions/checkout@v7.0.1
         with:
-          ref: ${{ needs.preflight.outputs.packaging_ref }}
+          ref: ${{ needs.preflight.outputs.tag }}
 
-      - name: Download and verify web dist release asset
+      - name: Stage released component artifacts
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ needs.preflight.outputs.tag }}
+          RELEASE_TAG: ${{ needs.preflight.outputs.tag }}
           VERSION: ${{ needs.preflight.outputs.version }}
-        run: |
-          set -euo pipefail
-          mkdir -p "$RUNNER_TEMP/web-release" "$RUNNER_TEMP/web-payload/dist"
-          gh release download "$TAG" --repo Unetic/unetic-web \
-            --pattern "unetic-web-dist-$VERSION.tar.gz" \
-            --pattern SHA256SUMS \
-            --dir "$RUNNER_TEMP/web-release"
-          (cd "$RUNNER_TEMP/web-release" && sha256sum -c SHA256SUMS --ignore-missing)
-          tar -C "$RUNNER_TEMP/web-payload/dist" -xzf "$RUNNER_TEMP/web-release/unetic-web-dist-$VERSION.tar.gz"
-          test -d "$RUNNER_TEMP/web-payload/dist/unetic-web/browser"
+          ARCHITECTURE: ${{ matrix.architecture }}
+        run: scripts/stage-released-components.sh "$GITHUB_WORKSPACE"
 
-      - name: Download representative OpenWrt SDK
-        run: |
-          scripts/download-openwrt-sdk.sh \
-            '${{ matrix.openwrt }}' \
-            '${{ matrix.target }}' \
-            '${{ matrix.subtarget }}' \
-            '${{ matrix.sdk_file }}' \
-            '${{ matrix.sdk_sha256 }}' \
-            "$RUNNER_TEMP/openwrt-sdk"
+      - name: Build and sign APK packages with OpenWrt SDK
+        uses: openwrt/gh-action-sdk@v9
+        env:
+          ARCH: ${{ matrix.architecture }}-25.12.5
+          FEEDNAME: unetic
+          FEED_DIR: ${{ github.workspace }}
+          ARTIFACTS_DIR: ${{ runner.temp }}/openwrt-artifacts
+          PACKAGES: unetic-core unetic-cli unetic-web
+          INDEX: "1"
+          PRIVATE_KEY: ${{ secrets.UNETIC_APK_PRIVATE_KEY }}
 
-      - name: Build architecture-independent web APK once for this OpenWrt version
-        run: |
-          scripts/build-apk.sh \
-            unetic-web \
-            '${{ needs.preflight.outputs.version }}' \
-            "$RUNNER_TEMP/openwrt-sdk" \
-            "$RUNNER_TEMP/web-payload" \
-            "$RUNNER_TEMP/web-apk"
-
-      - name: Upload reusable web APK
+      - name: Upload architecture repository
         uses: actions/upload-artifact@v7.0.1
         with:
-          name: web-apk-${{ matrix.openwrt }}
-          path: ${{ runner.temp }}/web-apk/*.apk
-          if-no-files-found: error
-
-  build-repository:
-    needs: [preflight, web-apk]
-    if: ${{ needs.preflight.outputs.needs_build == 'true' }}
-    strategy:
-      fail-fast: false
-      matrix: ${{ fromJSON(needs.preflight.outputs.target_matrix) }}
-    runs-on: ubuntu-24.04
-    steps:
-      - name: Check out packages tag
-        uses: actions/checkout@v7.0.1
-        with:
-          ref: ${{ needs.preflight.outputs.packaging_ref }}
-
-      - name: Download pinned OpenWrt SDK
-        run: |
-          scripts/download-openwrt-sdk.sh \
-            '${{ matrix.openwrt }}' \
-            '${{ matrix.target }}' \
-            '${{ matrix.subtarget }}' \
-            '${{ matrix.sdk_file }}' \
-            '${{ matrix.sdk_sha256 }}' \
-            "$RUNNER_TEMP/openwrt-sdk"
-
-      - name: Download and verify released core binary
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TAG: ${{ needs.preflight.outputs.tag }}
-          VERSION: ${{ needs.preflight.outputs.version }}
-          OPENWRT_VERSION: ${{ matrix.openwrt }}
-          PACKAGE_ARCH: ${{ matrix.architecture }}
-        run: |
-          set -euo pipefail
-          mkdir -p "$RUNNER_TEMP/core-release" "$RUNNER_TEMP/core-payload"
-          asset="unetic-core-$VERSION-openwrt-$OPENWRT_VERSION-$PACKAGE_ARCH"
-          gh release download "$TAG" --repo Unetic/unetic-core \
-            --pattern "$asset" --pattern SHA256SUMS --dir "$RUNNER_TEMP/core-release"
-          (cd "$RUNNER_TEMP/core-release" && sha256sum -c SHA256SUMS --ignore-missing)
-          install -m 755 "$RUNNER_TEMP/core-release/$asset" "$RUNNER_TEMP/core-payload/openwrt-binary"
-
-      - name: Download and verify released CLI binary
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TAG: ${{ needs.preflight.outputs.tag }}
-          VERSION: ${{ needs.preflight.outputs.version }}
-          OPENWRT_VERSION: ${{ matrix.openwrt }}
-          PACKAGE_ARCH: ${{ matrix.architecture }}
-        run: |
-          set -euo pipefail
-          mkdir -p "$RUNNER_TEMP/cli-release" "$RUNNER_TEMP/cli-payload"
-          asset="unetic-cli-$VERSION-openwrt-$OPENWRT_VERSION-$PACKAGE_ARCH"
-          gh release download "$TAG" --repo Unetic/unetic-cli \
-            --pattern "$asset" --pattern SHA256SUMS --dir "$RUNNER_TEMP/cli-release"
-          (cd "$RUNNER_TEMP/cli-release" && sha256sum -c SHA256SUMS --ignore-missing)
-          install -m 755 "$RUNNER_TEMP/cli-release/$asset" "$RUNNER_TEMP/cli-payload/openwrt-binary"
-
-      - name: Download web APK built once for this OpenWrt version
-        uses: actions/download-artifact@v8.0.1
-        with:
-          name: web-apk-${{ matrix.openwrt }}
-          path: ${{ runner.temp }}/web-apk
-
-      - name: Build core and CLI APKs around released binaries
-        run: |
-          set -euo pipefail
-          scripts/build-apk.sh unetic-core '${{ needs.preflight.outputs.version }}' \
-            "$RUNNER_TEMP/openwrt-sdk" "$RUNNER_TEMP/core-payload" "$RUNNER_TEMP/core-apk"
-          scripts/build-apk.sh unetic-cli '${{ needs.preflight.outputs.version }}' \
-            "$RUNNER_TEMP/openwrt-sdk" "$RUNNER_TEMP/cli-payload" "$RUNNER_TEMP/cli-apk"
-
-      - name: Assemble and sign architecture repository
-        env:
-          UNETIC_APK_PRIVATE_KEY: ${{ secrets.UNETIC_APK_PRIVATE_KEY }}
-        run: |
-          set -euo pipefail
-          repo="$RUNNER_TEMP/repository-site/${{ matrix.openwrt }}/${{ matrix.architecture }}"
-          mkdir -p "$repo"
-          cp "$RUNNER_TEMP/core-apk/"*.apk "$repo/"
-          cp "$RUNNER_TEMP/cli-apk/"*.apk "$repo/"
-          cp "$RUNNER_TEMP/web-apk/"*.apk "$repo/"
-
-          private_key="$RUNNER_TEMP/unetic-apk-private.pem"
-          printf '%s\n' "$UNETIC_APK_PRIVATE_KEY" > "$private_key"
-          chmod 600 "$private_key"
-          scripts/sign-repository.sh "$RUNNER_TEMP/openwrt-sdk" "$repo" "$private_key"
-
-      - name: Upload repository tree
-        uses: actions/upload-artifact@v7.0.1
-        with:
-          name: repository-${{ matrix.openwrt }}-${{ matrix.architecture }}
-          path: ${{ runner.temp }}/repository-site/
+          name: repository-${{ matrix.architecture }}
+          path: ${{ runner.temp }}/openwrt-artifacts/bin/packages/**
           if-no-files-found: error
 
   publish:
-    needs: [preflight, build-repository]
-    if: ${{ needs.preflight.outputs.needs_build == 'true' }}
+    needs: [preflight, build]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -298,56 +105,29 @@ jobs:
       name: github-pages
       url: ${{ steps.pages.outputs.page_url }}
     steps:
-      - name: Check out packages tag
+      - name: Check out packages
         uses: actions/checkout@v7.0.1
         with:
-          ref: ${{ needs.preflight.outputs.packaging_ref }}
+          ref: ${{ needs.preflight.outputs.tag }}
 
-      - name: Download all repository trees
+      - name: Download built repositories
         uses: actions/download-artifact@v8.0.1
         with:
           pattern: repository-*
-          path: site
-          merge-multiple: true
+          path: site/25.12
+          merge-multiple: false
 
-      - name: Prepare Pages and GitHub Release assets
-        env:
-          TAG: ${{ needs.preflight.outputs.tag }}
-          VERSION: ${{ needs.preflight.outputs.version }}
+      - name: Normalize repository layout
         run: |
           set -euo pipefail
-          mkdir -p site/keys release-assets
-          cp keys/unetic-apk-v1.pem site/keys/unetic-apk-v1.pem
-          cp keys/unetic-apk-v1.pem release-assets/unetic-apk-v1.pem
-
-          while IFS= read -r apk; do
-            rel=${apk#site/}
-            openwrt=${rel%%/*}
-            rest=${rel#*/}
-            arch=${rest%%/*}
-            base=$(basename "$apk")
-            if [[ "$base" == unetic-web-* ]]; then
-              destination="release-assets/$openwrt-all-$base"
-              [ -e "$destination" ] || cp "$apk" "$destination"
-            else
-              cp "$apk" "release-assets/$openwrt-$arch-$base"
-            fi
-          done < <(find site -type f -name '*.apk' -print | sort)
-
-          jq -r '.apk_releases[] as $r | $r.targets[] | "\($r.openwrt) \(.architecture)"' config/targets.json |
-          while read -r openwrt arch; do
-            tar -C "site/$openwrt" -czf "release-assets/unetic-repository-$openwrt-$arch.tar.gz" "$arch"
+          for directory in site/25.12/repository-*; do
+            architecture=${directory#site/25.12/repository-}
+            mkdir -p "site/25.12/$architecture"
+            cp -a "$directory/." "site/25.12/$architecture/"
+            rm -rf "$directory"
           done
-
-          jq -n \
-            --arg tag "$TAG" \
-            --arg version "$VERSION" \
-            --arg commit "$GITHUB_SHA" \
-            '{schema:1, tag:$tag, version:$version, packages_commit:$commit,
-              components:{core:$tag, cli:$tag, web:$tag}}' \
-            > "release-assets/unetic-packages-$VERSION-manifest.json"
-
-          (cd release-assets && sha256sum * > SHA256SUMS)
+          mkdir -p site/keys
+          cp keys/unetic-apk-v1.pem site/keys/
 
       - name: Configure GitHub Pages
         uses: actions/configure-pages@v6.0.0
@@ -357,22 +137,19 @@ jobs:
         with:
           path: site
 
-      - name: Deploy APK repository to GitHub Pages
+      - name: Deploy APK repository
         id: pages
         uses: actions/deploy-pages@v5.0.0
 
-      - name: Create or update packages GitHub Release
+      - name: Create or update GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ needs.preflight.outputs.tag }}
         run: |
           set -euo pipefail
+          tar -C site -czf "unetic-repository-${TAG#v}.tar.gz" 25.12 keys
           if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release upload "$TAG" release-assets/* --repo "$GITHUB_REPOSITORY" --clobber
+            gh release upload "$TAG" "unetic-repository-${TAG#v}.tar.gz" --repo "$GITHUB_REPOSITORY" --clobber
           else
-            gh release create "$TAG" release-assets/* \
-              --repo "$GITHUB_REPOSITORY" \
-              --verify-tag \
-              --generate-notes \
-              --title "$TAG"
+            gh release create "$TAG" "unetic-repository-${TAG#v}.tar.gz" --repo "$GITHUB_REPOSITORY" --verify-tag --generate-notes
           fi

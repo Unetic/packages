@@ -5,7 +5,6 @@ PKG_VERSION:=$(strip $(shell cat $(CURDIR)/source/VERSION))
 PKG_RELEASE:=1
 PKG_LICENSE:=GPL-2.0-only
 PKG_LICENSE_FILES:=LICENSE
-PKG_BUILD_DIR:=$(BUILD_DIR)/$(PKG_NAME)-$(PKG_VERSION)
 
 include $(INCLUDE_DIR)/package.mk
 
@@ -14,7 +13,6 @@ define Package/unetic-cli
   CATEGORY:=Administration
   TITLE:=Unetic CLI
   URL:=https://github.com/Unetic/unetic-cli
-  DEPENDS:=+ubus
 endef
 
 define Package/unetic-cli/description
