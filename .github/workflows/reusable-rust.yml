@@ -87,13 +87,12 @@ jobs:
           targets_json="$RUNNER_TEMP/unetic-targets.json"
           gh api "repos/Unetic/packages/contents/config/targets.json?ref=$deployment_sha" \
             --jq '.content' | tr -d '\n' | base64 --decode > "$targets_json"
-          jq -e '.schema == 1 and (.apk_releases | length > 0)' "$targets_json" >/dev/null
+          jq -e '.schema == 2 and .openwrt == "25.12" and (.targets | length > 0)' "$targets_json" >/dev/null
 
           matrix=$(jq -c '{include: [
-            .apk_releases[] as $r |
-            $r.targets[] |
+            .targets[] |
             {
-              openwrt: $r.openwrt,
+              openwrt: "25.12.5",
               architecture: .architecture,
               target: .target,
               subtarget: .subtarget,
@@ -115,9 +114,8 @@ jobs:
               grep -Fxq "$expected" <<<"$assets" || complete=false
             done < <(
               jq -r --arg component "$COMPONENT" --arg version "$version" '
-                .apk_releases[] as $r |
-                $r.targets[] |
-                "\($component)-\($version)-openwrt-\($r.openwrt)-\(.architecture)"
+              .targets[] |
+              "\($component)-\($version)-openwrt-25.12-\(.architecture)"
               ' "$targets_json"
               echo SHA256SUMS
             )
