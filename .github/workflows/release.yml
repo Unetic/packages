@@ -4,8 +4,6 @@ on:
   push:
     tags:
       - "v*"
-  release:
-    types: [published]
   workflow_dispatch:
     inputs:
       tag:
@@ -14,7 +12,7 @@ on:
         type: string
 
 concurrency:
-  group: packages-release-${{ inputs.tag || github.event.release.tag_name || github.ref_name }}
+  group: packages-release-${{ inputs.tag || github.ref_name }}
   cancel-in-progress: false
 
 permissions:
@@ -34,7 +32,7 @@ jobs:
       - name: Resolve requested tag
         id: tag
         env:
-          REQUESTED_TAG: ${{ inputs.tag || github.event.release.tag_name || github.ref_name }}
+          REQUESTED_TAG: ${{ inputs.tag || github.ref_name }}
         run: |
           set -euo pipefail
           tag="${REQUESTED_TAG#refs/tags/}"
@@ -59,7 +57,7 @@ jobs:
           echo "ref=$ref" >> "$GITHUB_OUTPUT"
 
       - name: Check out packaging configuration
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7.0.1
         with:
           ref: ${{ steps.packaging.outputs.ref }}
 
@@ -150,7 +148,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - name: Check out packages tag
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7.0.1
         with:
           ref: ${{ needs.preflight.outputs.packaging_ref }}
 
@@ -190,7 +188,7 @@ jobs:
             "$RUNNER_TEMP/web-apk"
 
       - name: Upload reusable web APK
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7.0.1
         with:
           name: web-apk-${{ matrix.openwrt }}
           path: ${{ runner.temp }}/web-apk/*.apk
@@ -205,7 +203,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - name: Check out packages tag
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7.0.1
         with:
           ref: ${{ needs.preflight.outputs.packaging_ref }}
 
@@ -252,7 +250,7 @@ jobs:
           install -m 755 "$RUNNER_TEMP/cli-release/$asset" "$RUNNER_TEMP/cli-payload/openwrt-binary"
 
       - name: Download web APK built once for this OpenWrt version
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8.0.1
         with:
           name: web-apk-${{ matrix.openwrt }}
           path: ${{ runner.temp }}/web-apk
@@ -282,7 +280,7 @@ jobs:
           scripts/sign-repository.sh "$RUNNER_TEMP/openwrt-sdk" "$repo" "$private_key"
 
       - name: Upload repository tree
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7.0.1
         with:
           name: repository-${{ matrix.openwrt }}-${{ matrix.architecture }}
           path: ${{ runner.temp }}/repository-site/
@@ -301,12 +299,12 @@ jobs:
       url: ${{ steps.pages.outputs.page_url }}
     steps:
       - name: Check out packages tag
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7.0.1
         with:
           ref: ${{ needs.preflight.outputs.packaging_ref }}
 
       - name: Download all repository trees
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8.0.1
         with:
           pattern: repository-*
           path: site
@@ -352,16 +350,16 @@ jobs:
           (cd release-assets && sha256sum * > SHA256SUMS)
 
       - name: Configure GitHub Pages
-        uses: actions/configure-pages@v5
+        uses: actions/configure-pages@v6.0.0
 
       - name: Upload Pages artifact
-        uses: actions/upload-pages-artifact@v4
+        uses: actions/upload-pages-artifact@v5.0.0
         with:
           path: site
 
       - name: Deploy APK repository to GitHub Pages
         id: pages
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v5.0.0
 
       - name: Create or update packages GitHub Release
         env:

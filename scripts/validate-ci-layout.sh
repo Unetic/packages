@@ -13,7 +13,8 @@ jq -e '
       ([ .architecture, .target, .subtarget, .sdk_file, .sdk_sha256,
          .rust_target, .rust_toolchain, .toolchain_prefix ]
        | all(.[]; type == "string" and length > 0)) and
-      (.rust_build_std | type == "boolean")
+      (.rust_build_std | type == "boolean") and
+      ((.rust_build_std == false) or (.rust_toolchain | startswith("nightly-")))
     )
   )
 ' config/targets.json >/dev/null

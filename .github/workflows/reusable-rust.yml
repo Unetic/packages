@@ -34,17 +34,9 @@ jobs:
       source_sha: ${{ steps.release.outputs.source_sha }}
     steps:
       - name: Check out component source
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7.0.1
         with:
           ref: ${{ inputs.ref || github.ref }}
-
-      - name: Check out deployment configuration
-        if: inputs.release
-        uses: actions/checkout@v4
-        with:
-          repository: Unetic/packages
-          ref: main
-          path: .ci/packages
 
       - name: Prepare CI/release state
         id: release
@@ -58,6 +50,7 @@ jobs:
           set -euo pipefail
           source_sha=$(git rev-parse HEAD)
           echo "source_sha=$source_sha" >> "$GITHUB_OUTPUT"
+
           version=$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["package"]["version"])')
           test -n "$version"
           echo "version=$version" >> "$GITHUB_OUTPUT"
@@ -70,17 +63,26 @@ jobs:
             exit 0
           fi
 
-          deployment_sha=$(git -C .ci/packages rev-parse HEAD)
-          echo "deployment_sha=$deployment_sha" >> "$GITHUB_OUTPUT"
-
           tag="$REQUESTED_REF"
           tag="${tag#refs/tags/}"
           if ! [[ "$tag" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
             echo "Release ref must be a semantic tag vX.Y.Z, got: $tag" >&2
             exit 1
           fi
-          test "$tag" = "v$version"
+          if [ "$tag" != "v$version" ]; then
+            echo "Release tag $tag does not match Cargo.toml version $version" >&2
+            exit 1
+          fi
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+          # Resolve packages/main once, then read only the immutable target config via GitHub API.
+          # No second repository checkout is needed in component jobs.
+          deployment_sha=$(gh api repos/Unetic/packages/commits/main --jq '.sha')
+          echo "deployment_sha=$deployment_sha" >> "$GITHUB_OUTPUT"
+          targets_json="$RUNNER_TEMP/unetic-targets.json"
+          gh api "repos/Unetic/packages/contents/config/targets.json?ref=$deployment_sha" \
+            --jq '.content' | tr -d '\n' | base64 --decode > "$targets_json"
+          jq -e '.schema == 1 and (.apk_releases | length > 0)' "$targets_json" >/dev/null
 
           matrix=$(jq -c '{include: [
             .apk_releases[] as $r |
@@ -97,7 +99,7 @@ jobs:
               rust_build_std: .rust_build_std,
               toolchain_prefix: .toolchain_prefix
             }
-          ]}' .ci/packages/config/targets.json)
+          ]}' "$targets_json")
           echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
 
           needs_build=true
@@ -111,7 +113,7 @@ jobs:
                 .apk_releases[] as $r |
                 $r.targets[] |
                 "\($component)-\($version)-openwrt-\($r.openwrt)-\(.architecture)"
-              ' .ci/packages/config/targets.json
+              ' "$targets_json"
               echo SHA256SUMS
             )
             if [ "$complete" = true ]; then
@@ -126,25 +128,20 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - name: Check out component source
-        uses: actions/checkout@v7
+        uses: actions/checkout@v7.0.1
         with:
           ref: ${{ needs.preflight.outputs.source_sha }}
 
-      - name: Install repository-pinned Rust toolchain
-        run: |
-          set -euo pipefail
-          toolchain=$(python3 -c 'import tomllib; print(tomllib.load(open("rust-toolchain.toml", "rb"))["toolchain"]["channel"])')
-          rustup toolchain install "$toolchain" --profile minimal --component clippy,rustfmt
-          rustup default "$toolchain"
-
-      - name: Cache Cargo dependencies
-        uses: actions/cache@v4
+      - name: Set up repository-pinned Rust toolchain and cache
+        uses: actions-rust-lang/setup-rust-toolchain@v1.17.0
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: cargo-ci-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+          components: clippy,rustfmt
+          cache: true
+          cache-key: ci-${{ inputs.component_name }}
+          rustflags: ""
+
+      - name: Check formatting
+        run: cargo fmt --check
 
       - name: Run Clippy
         run: cargo clippy --locked --all-targets --all-features -- -D warnings
@@ -164,41 +161,52 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - name: Check out component source
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7.0.1
         with:
           ref: ${{ needs.preflight.outputs.source_sha }}
 
-      - name: Check out deployment helpers
-        uses: actions/checkout@v4
-        with:
-          repository: Unetic/packages
-          ref: ${{ needs.preflight.outputs.deployment_sha }}
-          path: .ci/packages
-
       - name: Download pinned OpenWrt SDK
-        run: |
-          .ci/packages/scripts/download-openwrt-sdk.sh \
-            '${{ matrix.openwrt }}' \
-            '${{ matrix.target }}' \
-            '${{ matrix.subtarget }}' \
-            '${{ matrix.sdk_file }}' \
-            '${{ matrix.sdk_sha256 }}' \
-            "$RUNNER_TEMP/openwrt-sdk"
-
-      - name: Install Rust cross toolchain
         env:
-          RUST_BUILD_STD: ${{ matrix.rust_build_std }}
-          RUST_TARGET: ${{ matrix.rust_target }}
-          RUST_TOOLCHAIN: ${{ matrix.rust_toolchain }}
+          OPENWRT_VERSION: ${{ matrix.openwrt }}
+          OPENWRT_TARGET: ${{ matrix.target }}
+          OPENWRT_SUBTARGET: ${{ matrix.subtarget }}
+          SDK_FILE: ${{ matrix.sdk_file }}
+          SDK_SHA256: ${{ matrix.sdk_sha256 }}
+        shell: bash
         run: |
           set -euo pipefail
-          if [ "$RUST_BUILD_STD" = true ]; then
-            rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal --component rust-src
-          else
-            rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal --target "$RUST_TARGET"
-          fi
+          destination="$RUNNER_TEMP/openwrt-sdk"
+          archive="$RUNNER_TEMP/$SDK_FILE"
+          url="https://downloads.openwrt.org/releases/$OPENWRT_VERSION/targets/$OPENWRT_TARGET/$OPENWRT_SUBTARGET/$SDK_FILE"
 
-      - name: Cross-build release binary
+          rm -rf "$destination"
+          mkdir -p "$destination"
+          curl --fail --location --retry 3 --retry-delay 2 --output "$archive" "$url"
+          echo "$SDK_SHA256  $archive" | sha256sum --check
+          tar --zstd --extract --file "$archive" --directory "$destination" --strip-components=1
+          test -x "$destination/staging_dir/host/bin/apk"
+
+      - name: Set up Rust cross toolchain and cache
+        if: ${{ !matrix.rust_build_std }}
+        uses: actions-rust-lang/setup-rust-toolchain@v1.17.0
+        with:
+          toolchain: ${{ matrix.rust_toolchain }}
+          target: ${{ matrix.rust_target }}
+          cache: true
+          cache-key: openwrt-${{ inputs.component_name }}-${{ matrix.openwrt }}-${{ matrix.architecture }}
+          rustflags: ""
+
+      - name: Set up nightly Rust with rust-src and cache
+        if: ${{ matrix.rust_build_std }}
+        uses: actions-rust-lang/setup-rust-toolchain@v1.17.0
+        with:
+          toolchain: ${{ matrix.rust_toolchain }}
+          components: rust-src
+          cache: true
+          cache-key: openwrt-${{ inputs.component_name }}-${{ matrix.openwrt }}-${{ matrix.architecture }}
+          rustflags: ""
+
+      - name: Cross-build release binary with the pinned OpenWrt linker
         env:
           BINARY_NAME: ${{ inputs.binary_name }}
           COMPONENT: ${{ inputs.component_name }}
@@ -209,10 +217,16 @@ jobs:
           TOOLCHAIN_PREFIX: ${{ matrix.toolchain_prefix }}
           OPENWRT_VERSION: ${{ matrix.openwrt }}
           PACKAGE_ARCH: ${{ matrix.architecture }}
+        shell: bash
         run: |
           set -euo pipefail
-          linker=$(find "$RUNNER_TEMP/openwrt-sdk/staging_dir" -type f -name "$TOOLCHAIN_PREFIX-gcc" -print -quit)
-          test -n "$linker"
+          linker=$(find "$RUNNER_TEMP/openwrt-sdk/staging_dir" \
+            \( -type f -o -type l \) -name "$TOOLCHAIN_PREFIX-gcc" -print -quit)
+          if [ -z "$linker" ]; then
+            echo "OpenWrt linker not found: $TOOLCHAIN_PREFIX-gcc" >&2
+            exit 1
+          fi
+
           cargo_linker="CARGO_TARGET_$(echo "$RUST_TARGET" | tr '[:lower:]-' '[:upper:]_')_LINKER"
           export "$cargo_linker=$linker"
           export RUSTFLAGS='-C target-feature=-crt-static'
@@ -230,7 +244,7 @@ jobs:
           file "release-assets/$asset"
 
       - name: Upload binary for release job
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7.0.1
         with:
           name: release-${{ inputs.component_name }}-${{ matrix.openwrt }}-${{ matrix.architecture }}
           path: release-assets/*
@@ -242,7 +256,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - name: Download all release binaries
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8.0.1
         with:
           pattern: release-${{ inputs.component_name }}-*
           path: release-assets
