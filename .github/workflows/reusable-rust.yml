@@ -32,6 +32,7 @@ jobs:
       tag: ${{ steps.release.outputs.tag }}
       deployment_sha: ${{ steps.release.outputs.deployment_sha }}
       source_sha: ${{ steps.release.outputs.source_sha }}
+      component_toolchain: ${{ steps.release.outputs.component_toolchain }}
     steps:
       - name: Check out component source
         uses: actions/checkout@v7.0.1
@@ -50,6 +51,10 @@ jobs:
           set -euo pipefail
           source_sha=$(git rev-parse HEAD)
           echo "source_sha=$source_sha" >> "$GITHUB_OUTPUT"
+
+          component_toolchain=$(python3 -c 'import tomllib; print(tomllib.load(open("rust-toolchain.toml", "rb"))["toolchain"]["channel"])')
+          test -n "$component_toolchain"
+          echo "component_toolchain=$component_toolchain" >> "$GITHUB_OUTPUT"
 
           version=$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["package"]["version"])')
           test -n "$version"
@@ -135,6 +140,7 @@ jobs:
       - name: Set up repository-pinned Rust toolchain and cache
         uses: actions-rust-lang/setup-rust-toolchain@v1.17.0
         with:
+          toolchain: ${{ needs.preflight.outputs.component_toolchain }}
           components: clippy,rustfmt
           cache: true
           cache-key: ci-${{ inputs.component_name }}
@@ -186,11 +192,11 @@ jobs:
           tar --zstd --extract --file "$archive" --directory "$destination" --strip-components=1
           test -x "$destination/staging_dir/host/bin/apk"
 
-      - name: Set up Rust cross toolchain and cache
+      - name: Set up component-pinned Rust cross toolchain and cache
         if: ${{ !matrix.rust_build_std }}
         uses: actions-rust-lang/setup-rust-toolchain@v1.17.0
         with:
-          toolchain: ${{ matrix.rust_toolchain }}
+          toolchain: ${{ needs.preflight.outputs.component_toolchain }}
           target: ${{ matrix.rust_target }}
           cache: true
           cache-key: openwrt-${{ inputs.component_name }}-${{ matrix.openwrt }}-${{ matrix.architecture }}
@@ -214,6 +220,7 @@ jobs:
           RUST_BUILD_STD: ${{ matrix.rust_build_std }}
           RUST_TARGET: ${{ matrix.rust_target }}
           RUST_TOOLCHAIN: ${{ matrix.rust_toolchain }}
+          COMPONENT_TOOLCHAIN: ${{ needs.preflight.outputs.component_toolchain }}
           TOOLCHAIN_PREFIX: ${{ matrix.toolchain_prefix }}
           OPENWRT_VERSION: ${{ matrix.openwrt }}
           PACKAGE_ARCH: ${{ matrix.architecture }}
@@ -235,7 +242,7 @@ jobs:
             cargo "+$RUST_TOOLCHAIN" build --locked --release --target "$RUST_TARGET" \
               -Z build-std=std,panic_abort
           else
-            cargo "+$RUST_TOOLCHAIN" build --locked --release --target "$RUST_TARGET"
+            cargo "+$COMPONENT_TOOLCHAIN" build --locked --release --target "$RUST_TARGET"
           fi
 
           mkdir -p release-assets

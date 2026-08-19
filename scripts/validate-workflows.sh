@@ -16,6 +16,28 @@ if grep -q 'uses: actions/cache@' "$workflow_dir/reusable-rust.yml"; then
   exit 1
 fi
 
+
+# Stable cross-builds must inherit the exact toolchain pinned by each component repo.
+# Only build-std targets are allowed to carry an explicit nightly in targets.json.
+jq -e '
+  all(.apk_releases[].targets[];
+    if .rust_build_std then
+      (.rust_toolchain | type == "string" and startswith("nightly-"))
+    else
+      .rust_toolchain == "repository"
+    end
+  )
+' config/targets.json >/dev/null
+grep -q 'component_toolchain=.*rust-toolchain.toml' "$workflow_dir/reusable-rust.yml"
+grep -q 'toolchain: \${{ needs.preflight.outputs.component_toolchain }}' "$workflow_dir/reusable-rust.yml"
+if grep -q 'toolchain: \${{ matrix.rust_toolchain }}' "$workflow_dir/reusable-rust.yml"; then
+  count=$(grep -c 'toolchain: \${{ matrix.rust_toolchain }}' "$workflow_dir/reusable-rust.yml")
+  if [ "$count" -ne 1 ]; then
+    echo 'matrix.rust_toolchain may only be used by the nightly build-std setup step.' >&2
+    exit 1
+  fi
+fi
+
 # Reusable Rust must never checkout packages into a component workspace.
 if grep -q 'repository: Unetic/packages' "$workflow_dir/reusable-rust.yml"; then
   echo 'Double checkout of Unetic/packages detected in reusable-rust.yml.' >&2

@@ -14,7 +14,10 @@ jq -e '
          .rust_target, .rust_toolchain, .toolchain_prefix ]
        | all(.[]; type == "string" and length > 0)) and
       (.rust_build_std | type == "boolean") and
-      ((.rust_build_std == false) or (.rust_toolchain | startswith("nightly-")))
+      (
+        ((.rust_build_std == false) and (.rust_toolchain == "repository")) or
+        ((.rust_build_std == true) and (.rust_toolchain | startswith("nightly-")))
+      )
     )
   )
 ' config/targets.json >/dev/null
