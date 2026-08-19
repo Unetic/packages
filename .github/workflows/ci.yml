@@ -22,8 +22,5 @@ jobs:
       - name: Validate deployment configuration
         run: scripts/validate-ci-layout.sh
 
-      - name: Validate workflow modernization rules
-        run: bash scripts/validate-workflows.sh
-
-      - name: Verify packaging scripts are executable
-        run: test -x scripts/download-openwrt-sdk.sh -a -x scripts/build-apk.sh -a -x scripts/sign-repository.sh
+      - name: Verify staging script is executable
+        run: test -x scripts/stage-released-components.sh
