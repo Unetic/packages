@@ -24,7 +24,7 @@ jobs:
     outputs:
       tag: ${{ steps.prepare.outputs.tag }}
       version: ${{ steps.prepare.outputs.version }}
-      architectures: ${{ steps.prepare.outputs.architectures }}
+      target_matrix: ${{ steps.prepare.outputs.target_matrix }}
     steps:
       - name: Check out packages
         uses: actions/checkout@v7.0.1
@@ -49,16 +49,28 @@ jobs:
 
           jq -e --argjson expected '2' '.schema == $expected and .openwrt == "25.12" and (.architectures | length == 2)' config/targets.json >/dev/null
 
+          matrix=$(jq -c '{
+            include: [
+              .targets[] | {
+                openwrt: "25.12.5",
+                architecture: .architecture,
+                target: .target,
+                subtarget: .subtarget,
+                sdk_file: .sdk_file,
+                sdk_sha256: .sdk_sha256
+              }
+            ]
+          }' config/targets.json)
+
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           echo "version=$version" >> "$GITHUB_OUTPUT"
-          echo "architectures=$(jq -c .architectures config/targets.json)" >> "$GITHUB_OUTPUT"
+          echo "target_matrix=$matrix" >> "$GITHUB_OUTPUT"
 
   build:
     needs: preflight
     strategy:
       fail-fast: false
-      matrix:
-        architecture: ${{ fromJSON(needs.preflight.outputs.architectures) }}
+      matrix: ${{ fromJSON(needs.preflight.outputs.target_matrix) }}
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -68,35 +80,70 @@ jobs:
         with:
           ref: ${{ needs.preflight.outputs.tag }}
 
-      - name: Stage released component artifacts
+      - name: Download pinned OpenWrt SDK
+        run: |
+          scripts/download-openwrt-sdk.sh \
+            '${{ matrix.openwrt }}' \
+            '${{ matrix.target }}' \
+            '${{ matrix.subtarget }}' \
+            '${{ matrix.sdk_file }}' \
+            '${{ matrix.sdk_sha256 }}' \
+            "$RUNNER_TEMP/openwrt-sdk"
+
+      - name: Download and verify released component artifacts
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ needs.preflight.outputs.tag }}
+          TAG: ${{ needs.preflight.outputs.tag }}
           VERSION: ${{ needs.preflight.outputs.version }}
           ARCHITECTURE: ${{ matrix.architecture }}
-        run: scripts/stage-released-components.sh "$GITHUB_WORKSPACE"
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/core-payload" "$RUNNER_TEMP/cli-payload" "$RUNNER_TEMP/web-payload" "$RUNNER_TEMP/downloads"
 
-      - name: Prepare artifacts directory
-        run: mkdir -p "${{ runner.temp }}/openwrt-artifacts"
+          # Core binary
+          gh release download "$TAG" --repo Unetic/unetic-core \
+            --pattern "unetic-core-$VERSION-openwrt-25.12.5-$ARCHITECTURE" \
+            --pattern SHA256SUMS --dir "$RUNNER_TEMP/downloads/core"
+          (cd "$RUNNER_TEMP/downloads/core" && sha256sum -c SHA256SUMS --ignore-missing)
+          install -m 755 "$RUNNER_TEMP/downloads/core/unetic-core-$VERSION-openwrt-25.12.5-$ARCHITECTURE" "$RUNNER_TEMP/core-payload/openwrt-binary"
 
-      - name: Build and sign APK packages with OpenWrt SDK
-        uses: openwrt/gh-action-sdk@v9
+          # CLI binary
+          gh release download "$TAG" --repo Unetic/unetic-cli \
+            --pattern "unetic-cli-$VERSION-openwrt-25.12.5-$ARCHITECTURE" \
+            --pattern SHA256SUMS --dir "$RUNNER_TEMP/downloads/cli"
+          (cd "$RUNNER_TEMP/downloads/cli" && sha256sum -c SHA256SUMS --ignore-missing)
+          install -m 755 "$RUNNER_TEMP/downloads/cli/unetic-cli-$VERSION-openwrt-25.12.5-$ARCHITECTURE" "$RUNNER_TEMP/cli-payload/openwrt-binary"
+
+          # Web assets
+          gh release download "$TAG" --repo Unetic/unetic-web \
+            --pattern "unetic-web-dist-$VERSION.tar.gz" \
+            --pattern SHA256SUMS --dir "$RUNNER_TEMP/downloads/web"
+          (cd "$RUNNER_TEMP/downloads/web" && sha256sum -c SHA256SUMS --ignore-missing)
+          tar -C "$RUNNER_TEMP/web-payload" -xzf "$RUNNER_TEMP/downloads/web/unetic-web-dist-$VERSION.tar.gz"
+
+      - name: Build and sign APK packages
         env:
-          ARCH: ${{ matrix.architecture }}-25.12.5
-          FEEDNAME: unetic
-          FEED_DIR: ${{ github.workspace }}
-          ARTIFACTS_DIR: ${{ runner.temp }}/openwrt-artifacts
-          PACKAGES: unetic-core unetic-cli unetic-web
-          NO_DEFAULT_FEEDS: "1"
-          EXTRA_MAKE_FLAGS: "-j2 V=s"
-          INDEX: "1"
-          PRIVATE_KEY: ${{ secrets.UNETIC_APK_PRIVATE_KEY }}
+          UNETIC_APK_PRIVATE_KEY: ${{ secrets.UNETIC_APK_PRIVATE_KEY }}
+          VERSION: ${{ needs.preflight.outputs.version }}
+        run: |
+          set -euo pipefail
+          repo="$RUNNER_TEMP/repo"
+          mkdir -p "$repo"
+
+          scripts/build-apk.sh unetic-core "$VERSION" "$RUNNER_TEMP/openwrt-sdk" "$RUNNER_TEMP/core-payload" "$repo"
+          scripts/build-apk.sh unetic-cli "$VERSION" "$RUNNER_TEMP/openwrt-sdk" "$RUNNER_TEMP/cli-payload" "$repo"
+          scripts/build-apk.sh unetic-web "$VERSION" "$RUNNER_TEMP/openwrt-sdk" "$RUNNER_TEMP/web-payload" "$repo"
+
+          private_key="$RUNNER_TEMP/unetic-apk-private.pem"
+          printf '%s\n' "$UNETIC_APK_PRIVATE_KEY" > "$private_key"
+          chmod 600 "$private_key"
+          scripts/sign-repository.sh "$RUNNER_TEMP/openwrt-sdk" "$repo" "$private_key"
 
       - name: Upload architecture repository
         uses: actions/upload-artifact@v7.0.1
         with:
           name: repository-${{ matrix.architecture }}
-          path: ${{ runner.temp }}/openwrt-artifacts/bin/packages/**
+          path: ${{ runner.temp }}/repo/**
           if-no-files-found: error
 
   publish:
