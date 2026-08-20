@@ -87,6 +87,7 @@ jobs:
           FEED_DIR: ${{ github.workspace }}
           ARTIFACTS_DIR: ${{ runner.temp }}/openwrt-artifacts
           PACKAGES: unetic-core unetic-cli unetic-web
+          NO_DEFAULT_FEEDS: "1"
           INDEX: "1"
           PRIVATE_KEY: ${{ secrets.UNETIC_APK_PRIVATE_KEY }}
 
