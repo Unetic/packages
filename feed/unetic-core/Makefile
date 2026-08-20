@@ -26,11 +26,12 @@ define Build/Prepare
 endef
 
 define Build/Compile
-	$(TARGET_CC) $(TARGET_CFLAGS) -fPIC -shared \
-		-I$(STAGING_DIR)/usr/include \
+	$(TARGET_CC) $(TARGET_CFLAGS) $(TARGET_CPPFLAGS) -fPIC -shared \
+		-I$(CURDIR)/files/include \
+		-I$(CURDIR)/files/include/libubox \
 		$(CURDIR)/files/unetic_openwrt.c \
 		-o $(PKG_BUILD_DIR)/libunetic-openwrt.so \
-		$(TARGET_LDFLAGS) -lubus -lubox -lblobmsg_json
+		$(TARGET_LDFLAGS) -Wl,--allow-shlib-undefined -lubus -lubox -lblobmsg_json
 endef
 
 define Package/unetic-core/install
