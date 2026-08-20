@@ -76,6 +76,9 @@ jobs:
           ARCHITECTURE: ${{ matrix.architecture }}
         run: scripts/stage-released-components.sh "$GITHUB_WORKSPACE"
 
+      - name: Prepare artifacts directory
+        run: mkdir -p "${{ runner.temp }}/openwrt-artifacts"
+
       - name: Build and sign APK packages with OpenWrt SDK
         uses: openwrt/gh-action-sdk@v9
         env:
