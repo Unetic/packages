@@ -6,6 +6,7 @@
         "unetic": [
           "state",
           "wifi.get",
+          "wan.get",
           "operation.get",
           "maintenance.get",
           "health.get",
@@ -17,6 +18,8 @@
       "ubus": {
         "unetic": [
           "wifi.set_ssid",
+          "wan.set",
+          "wan.set_config",
           "maintenance.enter",
           "maintenance.exit"
         ]
