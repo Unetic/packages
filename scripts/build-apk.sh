@@ -36,7 +36,7 @@ find "$sdk/bin" -type f -name "$package_name-*.apk" -delete 2>/dev/null || true
 
 make -C "$sdk" defconfig
 make -C "$sdk" "package/$package_name/clean" >/dev/null
-make -C "$sdk" "package/$package_name/compile" -j2 V=s
+make -C "$sdk" "package/$package_name/compile" -j"$(nproc)" V=s
 
 mapfile -t apks < <(find "$sdk/bin" -type f -name "$package_name-*.apk" -print)
 if [ "${#apks[@]}" -ne 1 ]; then

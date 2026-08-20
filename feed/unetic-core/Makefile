@@ -31,7 +31,7 @@ define Build/Compile
 		-I$(CURDIR)/files/include/libubox \
 		$(CURDIR)/files/unetic_openwrt.c \
 		-o $(PKG_BUILD_DIR)/libunetic-openwrt.so \
-		$(TARGET_LDFLAGS) -Wl,--allow-shlib-undefined -lubus -lubox -lblobmsg_json
+		$(TARGET_LDFLAGS)
 endef
 
 define Package/unetic-core/install
