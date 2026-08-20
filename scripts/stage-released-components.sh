@@ -15,17 +15,18 @@ download_binary() {
   local repository=$1
   local name=$2
   local output=$3
-  local asset="${repository##unetic-}"
-  asset="unetic-${asset}-${VERSION}-openwrt-25.12-${ARCHITECTURE}"
+  local asset_prefix="unetic-${repository##unetic-}-${VERSION}-openwrt-"
 
   gh release download "$RELEASE_TAG" \
     --repo "Unetic/$repository" \
-    --pattern "$asset" \
+    --pattern "${asset_prefix}*${ARCHITECTURE}" \
     --pattern SHA256SUMS \
     --dir "$work/$name"
 
   (cd "$work/$name" && sha256sum -c SHA256SUMS --ignore-missing)
-  install -m 755 "$work/$name/$asset" "$output"
+  local downloaded
+  downloaded=$(find "$work/$name" -maxdepth 1 -name "${asset_prefix}*${ARCHITECTURE}" -print -quit)
+  install -m 755 "$downloaded" "$output"
 }
 
 mkdir -p "$root/feed/unetic-core/source" "$root/feed/unetic-cli/source" "$root/feed/unetic-web/source"

@@ -115,7 +115,7 @@ jobs:
             done < <(
               jq -r --arg component "$COMPONENT" --arg version "$version" '
               .targets[] |
-              "\($component)-\($version)-openwrt-25.12-\(.architecture)"
+              "\($component)-\($version)-openwrt-25.12.5-\(.architecture)"
               ' "$targets_json"
               echo SHA256SUMS
             )
