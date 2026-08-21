@@ -29,7 +29,7 @@ define Build/Compile
 	$(TARGET_CC) $(TARGET_CFLAGS) $(TARGET_CPPFLAGS) -fPIC -shared \
 		-I$(CURDIR)/files/include \
 		-I$(CURDIR)/files/include/libubox \
-		$(CURDIR)/files/unetic_openwrt.c \
+		$(CURDIR)/files/src/*.c \
 		-o $(PKG_BUILD_DIR)/libunetic-openwrt.so \
 		$(TARGET_LDFLAGS) -lubox -lubus -lblobmsg_json
 endef
