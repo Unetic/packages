@@ -99,6 +99,7 @@ static const struct ubus_method unetic_methods[] = {
     UBUS_METHOD("wan.set", unetic_method_handler, set_wan_policy),
     UBUS_METHOD("wan.set_config", unetic_method_handler, set_wan_policy),
     UBUS_METHOD_NOARG("switch.get", unetic_method_handler),
+    UBUS_METHOD_NOARG("system.info", unetic_method_handler),
     UBUS_METHOD_NOARG("operation.get", unetic_method_handler),
     UBUS_METHOD_NOARG("maintenance.get", unetic_method_handler),
     UBUS_METHOD("maintenance.enter", unetic_method_handler, maintenance_policy),

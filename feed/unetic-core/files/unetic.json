@@ -8,6 +8,7 @@
           "wifi.get",
           "wan.get",
           "switch.get",
+          "system.info",
           "operation.get",
           "maintenance.get",
           "health.get",
