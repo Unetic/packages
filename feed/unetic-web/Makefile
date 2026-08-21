@@ -32,7 +32,15 @@ endef
 
 define Package/unetic-web/install
 	$(INSTALL_DIR) $(1)/www/unetic
-	$(CP) $(PKG_BUILD_DIR)/dist/unetic-web/browser/. $(1)/www/unetic/
+	if [ -d $(PKG_BUILD_DIR)/unetic-web/browser ]; then \
+		$(CP) $(PKG_BUILD_DIR)/unetic-web/browser/. $(1)/www/unetic/ ; \
+	elif [ -d $(PKG_BUILD_DIR)/dist/unetic-web/browser ]; then \
+		$(CP) $(PKG_BUILD_DIR)/dist/unetic-web/browser/. $(1)/www/unetic/ ; \
+	elif [ -d $(PKG_BUILD_DIR)/browser ]; then \
+		$(CP) $(PKG_BUILD_DIR)/browser/. $(1)/www/unetic/ ; \
+	else \
+		$(CP) $(PKG_BUILD_DIR)/. $(1)/www/unetic/ ; \
+	fi
 endef
 
 $(eval $(call BuildPackage,unetic-web))
