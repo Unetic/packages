@@ -78,11 +78,26 @@ static const struct blobmsg_policy maintenance_policy[__MAINTENANCE_MAX] = {
     [MAINTENANCE_REASON] = { .name = "reason", .type = BLOBMSG_TYPE_STRING },
 };
 
+enum {
+    SET_WAN_WAN,
+    SET_WAN_EXPECTED_REVISION,
+    SET_WAN_REQUEST_ID,
+    __SET_WAN_MAX,
+};
+
+static const struct blobmsg_policy set_wan_policy[__SET_WAN_MAX] = {
+    [SET_WAN_WAN] = { .name = "wan", .type = BLOBMSG_TYPE_TABLE },
+    [SET_WAN_EXPECTED_REVISION] = { .name = "expected_revision", .type = BLOBMSG_TYPE_INT64 },
+    [SET_WAN_REQUEST_ID] = { .name = "request_id", .type = BLOBMSG_TYPE_STRING },
+};
+
 static const struct ubus_method unetic_methods[] = {
     UBUS_METHOD_NOARG("state", unetic_method_handler),
     UBUS_METHOD_NOARG("wifi.get", unetic_method_handler),
     UBUS_METHOD("wifi.set_ssid", unetic_method_handler, set_ssid_policy),
     UBUS_METHOD_NOARG("wan.get", unetic_method_handler),
+    UBUS_METHOD("wan.set", unetic_method_handler, set_wan_policy),
+    UBUS_METHOD("wan.set_config", unetic_method_handler, set_wan_policy),
     UBUS_METHOD_NOARG("switch.get", unetic_method_handler),
     UBUS_METHOD_NOARG("operation.get", unetic_method_handler),
     UBUS_METHOD_NOARG("maintenance.get", unetic_method_handler),
