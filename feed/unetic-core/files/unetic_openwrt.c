@@ -28,14 +28,16 @@ static int unetic_method_handler(struct ubus_context *ctx,
                                  struct blob_attr *msg)
 {
     struct unetic_server *server = container_of(obj, struct unetic_server, object);
-    struct blob_buf reply = {};
+    struct blob_buf reply = {0};
     char *request_json = NULL;
     char *response_json = NULL;
     int rc = UBUS_STATUS_OK;
 
+    /* Parse incoming blob message to JSON string if it exists */
     if (msg)
         request_json = blobmsg_format_json(msg, true);
 
+    /* Pass method and request JSON to the external handler function */
     response_json = server->handler(server->userdata, method,
                                     request_json ? request_json : "{}");
     free(request_json);
@@ -43,6 +45,7 @@ static int unetic_method_handler(struct ubus_context *ctx,
     if (!response_json)
         return UBUS_STATUS_UNKNOWN_ERROR;
 
+    /* Convert returned JSON string back into a UBUS blob message for the reply */
     blob_buf_init(&reply, 0);
     if (!blobmsg_add_json_from_string(&reply, response_json)) {
         free(response_json);
@@ -51,6 +54,8 @@ static int unetic_method_handler(struct ubus_context *ctx,
     }
 
     free(response_json);
+    
+    /* Send the blob reply back to the UBUS caller */
     rc = ubus_send_reply(ctx, req, reply.head);
     blob_buf_free(&reply);
     return rc;
@@ -134,11 +139,13 @@ void *unetic_ubus_server_new(unetic_handler_fn handler, void *userdata)
     if (!server)
         return NULL;
 
+    /* Initialize uloop for event polling */
     if (uloop_init() != 0) {
         free(server);
         return NULL;
     }
 
+    /* Connect to the system bus */
     server->ctx = ubus_connect(NULL);
     if (!server->ctx) {
         uloop_done();
@@ -149,15 +156,18 @@ void *unetic_ubus_server_new(unetic_handler_fn handler, void *userdata)
     server->handler = handler;
     server->userdata = userdata;
 
+    /* Define the UBUS object type and supported methods */
     server->type.name = "unetic";
     server->type.methods = unetic_methods;
     server->type.n_methods = ARRAY_SIZE(unetic_methods);
 
+    /* Bind the concrete object to the type defined above */
     server->object.name = "unetic";
     server->object.type = &server->type;
     server->object.methods = unetic_methods;
     server->object.n_methods = ARRAY_SIZE(unetic_methods);
 
+    /* Register the object on the system bus */
     rc = ubus_add_object(server->ctx, &server->object);
     if (rc != UBUS_STATUS_OK) {
         ubus_free(server->ctx);
@@ -166,6 +176,7 @@ void *unetic_ubus_server_new(unetic_handler_fn handler, void *userdata)
         return NULL;
     }
 
+    /* Attach the ubus connection to the uloop instance */
     ubus_add_uloop(server->ctx);
 
     return server;
@@ -189,18 +200,20 @@ int unetic_ubus_server_notify(void *handle, const char *event,
                               const char *json)
 {
     struct unetic_server *server = handle;
-    struct blob_buf message = {};
+    struct blob_buf message = {0};
     int rc;
 
     if (!server || !event || !json)
         return UBUS_STATUS_INVALID_ARGUMENT;
 
+    /* Initialize and convert JSON string payload to a UBUS blob message */
     blob_buf_init(&message, 0);
     if (!blobmsg_add_json_from_string(&message, json)) {
         blob_buf_free(&message);
         return UBUS_STATUS_INVALID_ARGUMENT;
     }
 
+    /* Broadcast the event to all subscribers without blocking (-1 timeout) */
     rc = ubus_notify(server->ctx, &server->object, event, message.head, -1);
     blob_buf_free(&message);
     return rc;
