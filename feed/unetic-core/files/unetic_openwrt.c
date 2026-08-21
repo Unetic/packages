@@ -82,6 +82,8 @@ static const struct ubus_method unetic_methods[] = {
     UBUS_METHOD_NOARG("state", unetic_method_handler),
     UBUS_METHOD_NOARG("wifi.get", unetic_method_handler),
     UBUS_METHOD("wifi.set_ssid", unetic_method_handler, set_ssid_policy),
+    UBUS_METHOD_NOARG("wan.get", unetic_method_handler),
+    UBUS_METHOD_NOARG("switch.get", unetic_method_handler),
     UBUS_METHOD_NOARG("operation.get", unetic_method_handler),
     UBUS_METHOD_NOARG("maintenance.get", unetic_method_handler),
     UBUS_METHOD("maintenance.enter", unetic_method_handler, maintenance_policy),
