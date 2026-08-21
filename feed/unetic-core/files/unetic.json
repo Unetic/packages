@@ -21,7 +21,7 @@
     "write": {
       "ubus": {
         "unetic": [
-          "wifi.set_ssid",
+          "wifi.set_config",
           "wan.set",
           "wan.set_config",
           "maintenance.enter",

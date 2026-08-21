@@ -57,16 +57,20 @@ static int unetic_method_handler(struct ubus_context *ctx,
 }
 
 enum {
-    SET_SSID_SSID,
-    SET_SSID_EXPECTED_REVISION,
-    SET_SSID_REQUEST_ID,
-    __SET_SSID_MAX,
+    SET_WIFI_CONFIG_SSID,
+    SET_WIFI_CONFIG_ENCRYPTION,
+    SET_WIFI_CONFIG_KEY,
+    SET_WIFI_CONFIG_EXPECTED_REVISION,
+    SET_WIFI_CONFIG_REQUEST_ID,
+    __SET_WIFI_CONFIG_MAX,
 };
 
-static const struct blobmsg_policy set_ssid_policy[__SET_SSID_MAX] = {
-    [SET_SSID_SSID] = { .name = "ssid", .type = BLOBMSG_TYPE_STRING },
-    [SET_SSID_EXPECTED_REVISION] = { .name = "expected_revision", .type = BLOBMSG_TYPE_INT64 },
-    [SET_SSID_REQUEST_ID] = { .name = "request_id", .type = BLOBMSG_TYPE_STRING },
+static const struct blobmsg_policy set_wifi_config_policy[__SET_WIFI_CONFIG_MAX] = {
+    [SET_WIFI_CONFIG_SSID] = { .name = "ssid", .type = BLOBMSG_TYPE_STRING },
+    [SET_WIFI_CONFIG_ENCRYPTION] = { .name = "encryption", .type = BLOBMSG_TYPE_STRING },
+    [SET_WIFI_CONFIG_KEY] = { .name = "key", .type = BLOBMSG_TYPE_STRING },
+    [SET_WIFI_CONFIG_EXPECTED_REVISION] = { .name = "expected_revision", .type = BLOBMSG_TYPE_INT64 },
+    [SET_WIFI_CONFIG_REQUEST_ID] = { .name = "request_id", .type = BLOBMSG_TYPE_STRING },
 };
 
 enum {
@@ -103,7 +107,7 @@ static const struct blobmsg_policy ping_policy[__PING_MAX] = {
 static const struct ubus_method unetic_methods[] = {
     UBUS_METHOD_NOARG("state", unetic_method_handler),
     UBUS_METHOD_NOARG("wifi.get", unetic_method_handler),
-    UBUS_METHOD("wifi.set_ssid", unetic_method_handler, set_ssid_policy),
+    UBUS_METHOD("wifi.set_config", unetic_method_handler, set_wifi_config_policy),
     UBUS_METHOD_NOARG("wan.get", unetic_method_handler),
     UBUS_METHOD("wan.set", unetic_method_handler, set_wan_policy),
     UBUS_METHOD("wan.set_config", unetic_method_handler, set_wan_policy),
