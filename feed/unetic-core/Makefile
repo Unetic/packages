@@ -1,7 +1,7 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=unetic-core
-PKG_VERSION:=$(strip $(shell cat $(CURDIR)/source/VERSION))
+PKG_VERSION:=$(strip $(shell cat $(CURDIR)/source/VERSION 2>/dev/null || echo "1.0.0"))
 PKG_RELEASE:=1
 PKG_LICENSE:=GPL-2.0-only
 PKG_LICENSE_FILES:=LICENSE
@@ -22,7 +22,7 @@ endef
 
 define Build/Prepare
 	mkdir -p $(PKG_BUILD_DIR)
-	$(CP) $(CURDIR)/source/. $(PKG_BUILD_DIR)/
+	$(CP) $(CURDIR)/source/. $(PKG_BUILD_DIR)/ || true
 endef
 
 define Build/Compile
@@ -31,7 +31,7 @@ define Build/Compile
 		-I$(CURDIR)/files/include/libubox \
 		$(CURDIR)/files/unetic_openwrt.c \
 		-o $(PKG_BUILD_DIR)/libunetic-openwrt.so \
-		$(TARGET_LDFLAGS)
+		$(TARGET_LDFLAGS) -lubox -lubus -lblobmsg_json
 endef
 
 define Package/unetic-core/install

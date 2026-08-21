@@ -142,7 +142,6 @@ void *unetic_ubus_server_new(unetic_handler_fn handler, void *userdata)
     server->object.methods = unetic_methods;
     server->object.n_methods = ARRAY_SIZE(unetic_methods);
 
-    ubus_add_uloop(server->ctx);
     rc = ubus_add_object(server->ctx, &server->object);
     if (rc != UBUS_STATUS_OK) {
         ubus_free(server->ctx);
@@ -150,6 +149,8 @@ void *unetic_ubus_server_new(unetic_handler_fn handler, void *userdata)
         free(server);
         return NULL;
     }
+
+    ubus_add_uloop(server->ctx);
 
     return server;
 }
