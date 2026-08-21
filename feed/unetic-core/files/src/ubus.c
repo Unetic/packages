@@ -71,6 +71,7 @@ int unetic_ubus_server_poll(void *handle, int timeout_ms)
     if (timeout_ms < 0)
         timeout_ms = 100;
 
+    uloop_cancelled = false;
     uloop_run_timeout(timeout_ms);
     return UBUS_STATUS_OK;
 }
@@ -85,7 +86,7 @@ int unetic_ubus_server_notify(void *handle, const char *event,
     if (!server || !event || !json)
         return UBUS_STATUS_INVALID_ARGUMENT;
 
-    blob_buf_init(&message, 0);
+    blobmsg_buf_init(&message);
     if (!blobmsg_add_json_from_string(&message, json)) {
         blob_buf_free(&message);
         return UBUS_STATUS_INVALID_ARGUMENT;

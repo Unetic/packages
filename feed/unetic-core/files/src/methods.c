@@ -19,8 +19,11 @@ static int unetic_method_handler(struct ubus_context *ctx,
     char *response_json = NULL;
     int rc = UBUS_STATUS_OK;
 
-    if (msg)
+    if (msg) {
         request_json = blobmsg_format_json(msg, true);
+        if (!request_json)
+            return UBUS_STATUS_UNKNOWN_ERROR;
+    }
 
     response_json = server->handler(server->userdata, method,
                                     request_json ? request_json : "{}");
@@ -29,7 +32,7 @@ static int unetic_method_handler(struct ubus_context *ctx,
     if (!response_json)
         return UBUS_STATUS_UNKNOWN_ERROR;
 
-    blob_buf_init(&reply, 0);
+    blobmsg_buf_init(&reply);
     if (!blobmsg_add_json_from_string(&reply, response_json)) {
         free(response_json);
         blob_buf_free(&reply);
