@@ -1,7 +1,7 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=unetic-core
-PKG_VERSION:=$(strip $(shell cat $(CURDIR)/source/VERSION 2>/dev/null || echo "1.0.0"))
+PKG_VERSION:=0.2.0
 PKG_RELEASE:=1
 PKG_LICENSE:=GPL-2.0-only
 PKG_LICENSE_FILES:=LICENSE
