@@ -12,6 +12,7 @@
           "operation.get",
           "maintenance.get",
           "health.get",
+          "tools.ping",
           ":subscribe"
         ]
       }

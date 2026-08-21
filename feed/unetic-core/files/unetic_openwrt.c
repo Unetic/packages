@@ -91,6 +91,15 @@ static const struct blobmsg_policy set_wan_policy[__SET_WAN_MAX] = {
     [SET_WAN_REQUEST_ID] = { .name = "request_id", .type = BLOBMSG_TYPE_STRING },
 };
 
+enum {
+    PING_HOST,
+    __PING_MAX,
+};
+
+static const struct blobmsg_policy ping_policy[__PING_MAX] = {
+    [PING_HOST] = { .name = "host", .type = BLOBMSG_TYPE_STRING },
+};
+
 static const struct ubus_method unetic_methods[] = {
     UBUS_METHOD_NOARG("state", unetic_method_handler),
     UBUS_METHOD_NOARG("wifi.get", unetic_method_handler),
@@ -105,6 +114,7 @@ static const struct ubus_method unetic_methods[] = {
     UBUS_METHOD("maintenance.enter", unetic_method_handler, maintenance_policy),
     UBUS_METHOD_NOARG("maintenance.exit", unetic_method_handler),
     UBUS_METHOD_NOARG("health.get", unetic_method_handler),
+    UBUS_METHOD("tools.ping", unetic_method_handler, ping_policy),
 };
 
 void *unetic_ubus_server_new(unetic_handler_fn handler, void *userdata)
