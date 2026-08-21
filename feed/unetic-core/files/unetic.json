@@ -9,6 +9,7 @@
           "wan.get",
           "switch.get",
           "system.info",
+          "devices.list",
           "operation.get",
           "maintenance.get",
           "health.get",
