@@ -48,20 +48,48 @@ static int unetic_method_handler(struct ubus_context *ctx,
 
 const struct ubus_method unetic_methods[] = {
     UBUS_METHOD_NOARG("state", unetic_method_handler),
+    UBUS_METHOD_NOARG("state.get", unetic_method_handler),
+    UBUS_METHOD_NOARG("state.subscribe", unetic_method_handler),
+    UBUS_METHOD_NOARG("state.subscribe.cancel", unetic_method_handler),
+
     UBUS_METHOD_NOARG("wifi.get", unetic_method_handler),
-    UBUS_METHOD("wifi.set_config", unetic_method_handler, set_wifi_config_policy),
+    UBUS_METHOD_NOARG("wifi.set_config", unetic_method_handler),
+
     UBUS_METHOD_NOARG("wan.get", unetic_method_handler),
-    UBUS_METHOD("wan.set", unetic_method_handler, set_wan_policy),
-    UBUS_METHOD("wan.set_config", unetic_method_handler, set_wan_policy),
+    UBUS_METHOD_NOARG("wan.get_config", unetic_method_handler),
+    UBUS_METHOD_NOARG("wan.set", unetic_method_handler),
+    UBUS_METHOD_NOARG("wan.set_config", unetic_method_handler),
+
+    UBUS_METHOD_NOARG("ports.list", unetic_method_handler),
     UBUS_METHOD_NOARG("switch.get", unetic_method_handler),
     UBUS_METHOD_NOARG("system.info", unetic_method_handler),
+
     UBUS_METHOD_NOARG("devices.list", unetic_method_handler),
+    UBUS_METHOD_NOARG("devices.register", unetic_method_handler),
+    UBUS_METHOD_NOARG("devices.update", unetic_method_handler),
+    UBUS_METHOD_NOARG("devices.delete", unetic_method_handler),
+    UBUS_METHOD_NOARG("devices.add_port_forward", unetic_method_handler),
+    UBUS_METHOD_NOARG("devices.remove_port_forward", unetic_method_handler),
+
+    UBUS_METHOD_NOARG("dns.get", unetic_method_handler),
+    UBUS_METHOD_NOARG("dns.set", unetic_method_handler),
+    UBUS_METHOD_NOARG("dns.record.add", unetic_method_handler),
+    UBUS_METHOD_NOARG("dns.record.remove", unetic_method_handler),
+
+    UBUS_METHOD_NOARG("ddns.get", unetic_method_handler),
+    UBUS_METHOD_NOARG("ddns.set", unetic_method_handler),
+    UBUS_METHOD_NOARG("ddns.test", unetic_method_handler),
+
+    UBUS_METHOD_NOARG("mesh.sync", unetic_method_handler),
+    UBUS_METHOD_NOARG("mesh.pair", unetic_method_handler),
+    UBUS_METHOD_NOARG("mesh.topology", unetic_method_handler),
+
     UBUS_METHOD_NOARG("operation.get", unetic_method_handler),
     UBUS_METHOD_NOARG("maintenance.get", unetic_method_handler),
-    UBUS_METHOD("maintenance.enter", unetic_method_handler, maintenance_policy),
+    UBUS_METHOD_NOARG("maintenance.enter", unetic_method_handler),
     UBUS_METHOD_NOARG("maintenance.exit", unetic_method_handler),
     UBUS_METHOD_NOARG("health.get", unetic_method_handler),
-    UBUS_METHOD("tools.ping", unetic_method_handler, ping_policy),
+    UBUS_METHOD_NOARG("tools.ping", unetic_method_handler),
 };
 
 const int unetic_methods_count = ARRAY_SIZE(unetic_methods);

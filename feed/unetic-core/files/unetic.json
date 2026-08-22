@@ -4,30 +4,34 @@
     "read": {
       "ubus": {
         "unetic": [
-          "state",
-          "wifi.get",
-          "wan.get",
-          "switch.get",
-          "system.info",
-          "devices.list",
-          "operation.get",
-          "maintenance.get",
-          "health.get",
-          "tools.ping",
-          ":subscribe"
+          "*"
+        ],
+        "uci": [
+          "*"
+        ],
+        "system": [
+          "*"
+        ],
+        "network.interface": [
+          "*"
         ]
-      }
+      },
+      "uci": [
+        "*"
+      ]
     },
     "write": {
       "ubus": {
         "unetic": [
-          "wifi.set_config",
-          "wan.set",
-          "wan.set_config",
-          "maintenance.enter",
-          "maintenance.exit"
+          "*"
+        ],
+        "uci": [
+          "*"
         ]
-      }
+      },
+      "uci": [
+        "*"
+      ]
     }
   }
 }
