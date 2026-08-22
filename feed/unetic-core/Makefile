@@ -13,7 +13,7 @@ define Package/unetic-core
   CATEGORY:=Administration
   TITLE:=Unetic control-plane daemon
   URL:=https://github.com/Unetic/unetic-core
-  DEPENDS:=+rpcd +libubus +libubox +libblobmsg-json
+  DEPENDS:=+rpcd +libubus +libubox +libblobmsg-json +ip-full +tc-full +iptables-nft +sqm-scripts +usteer +wpad-mbedtls
 endef
 
 define Package/unetic-core/description
@@ -27,8 +27,6 @@ endef
 
 define Build/Compile
 	$(TARGET_CC) $(TARGET_CFLAGS) $(TARGET_CPPFLAGS) -fPIC -shared \
-		-I$(CURDIR)/files/include \
-		-I$(CURDIR)/files/include/libubox \
 		$(CURDIR)/files/src/*.c \
 		-o $(PKG_BUILD_DIR)/libunetic-openwrt.so \
 		$(TARGET_LDFLAGS) -lubox -lubus -lblobmsg_json
