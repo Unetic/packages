@@ -25,17 +25,9 @@ define Build/Prepare
 	$(CP) $(CURDIR)/source/. $(PKG_BUILD_DIR)/ || true
 endef
 
-define Build/Compile
-	$(TARGET_CC) $(TARGET_CFLAGS) $(TARGET_CPPFLAGS) -fPIC -shared \
-		$(CURDIR)/files/src/*.c \
-		-o $(PKG_BUILD_DIR)/libunetic-openwrt.so \
-		$(TARGET_LDFLAGS) -lubox -lubus -lblobmsg_json
-endef
-
 define Package/unetic-core/install
-	$(INSTALL_DIR) $(1)/usr/sbin $(1)/usr/lib $(1)/etc/init.d $(1)/usr/share/rpcd/acl.d
+	$(INSTALL_DIR) $(1)/usr/sbin $(1)/etc/init.d $(1)/usr/share/rpcd/acl.d
 	$(INSTALL_BIN) $(PKG_BUILD_DIR)/openwrt-binary $(1)/usr/sbin/unetic-core
-	$(INSTALL_BIN) $(PKG_BUILD_DIR)/libunetic-openwrt.so $(1)/usr/lib/libunetic-openwrt.so
 	$(INSTALL_BIN) $(CURDIR)/files/unetic-core.init $(1)/etc/init.d/unetic-core
 	$(INSTALL_DATA) $(CURDIR)/files/unetic.json $(1)/usr/share/rpcd/acl.d/unetic.json
 endef

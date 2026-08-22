@@ -225,9 +225,16 @@ jobs:
             exit 1
           fi
 
+          ubus_library=$(find "$RUNNER_TEMP/openwrt-sdk/staging_dir" \
+            -path '*/usr/lib/libubus.so' -print -quit)
+          if [ -z "$ubus_library" ]; then
+            echo 'OpenWrt libubus not found in SDK' >&2
+            exit 1
+          fi
+
           cargo_linker="CARGO_TARGET_$(echo "$RUST_TARGET" | tr '[:lower:]-' '[:upper:]_')_LINKER"
           export "$cargo_linker=$linker"
-          export RUSTFLAGS='-C target-feature=-crt-static'
+          export RUSTFLAGS="-C target-feature=-crt-static -L native=$(dirname "$ubus_library")"
 
           if [ "$RUST_BUILD_STD" = true ]; then
             cargo "+$RUST_TOOLCHAIN" build --locked --release --target "$RUST_TARGET" \
