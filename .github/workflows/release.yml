@@ -80,7 +80,7 @@ jobs:
         run: mkdir -p "${{ runner.temp }}/openwrt-artifacts"
 
       - name: Build and sign APK packages with OpenWrt SDK
-        uses: openwrt/gh-action-sdk@v9
+        uses: openwrt/gh-action-sdk@v11
         env:
           ARCH: ${{ matrix.architecture }}-25.12.5
           FEEDNAME: unetic
