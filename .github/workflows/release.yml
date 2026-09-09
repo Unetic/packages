@@ -146,7 +146,7 @@ jobs:
 
       - name: Deploy APK repository
         id: pages
-        uses: actions/deploy-pages@v5.0.0
+        uses: actions/deploy-pages@v5.0.1
 
       - name: Create or update GitHub Release
         env:
