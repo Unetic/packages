@@ -93,7 +93,7 @@ jobs:
           V: "s"
 
       - name: Upload architecture repository
-        uses: actions/upload-artifact@v7.0.1
+        uses: actions/upload-artifact@v7.0.2
         with:
           name: repository-${{ matrix.architecture }}
           path: ${{ runner.temp }}/openwrt-artifacts/bin/packages/**

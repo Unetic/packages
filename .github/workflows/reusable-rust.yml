@@ -249,7 +249,7 @@ jobs:
           file "release-assets/$asset"
 
       - name: Upload binary for release job
-        uses: actions/upload-artifact@v7.0.1
+        uses: actions/upload-artifact@v7.0.2
         with:
           name: release-${{ inputs.component_name }}-${{ matrix.openwrt }}-${{ matrix.architecture }}
           path: release-assets/*
